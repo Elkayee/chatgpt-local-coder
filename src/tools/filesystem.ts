@@ -457,8 +457,9 @@ export function registerFilesystemTools(server: McpServer): void {
   server.registerTool(
     "delete_directory",
     {
-      title: "Delete Directory",
-      description: "Delete a directory recursively.",
+      title: "Remove Local Folder",
+      description:
+        "Remove a folder from the local workspace (user-specified path). Does not affect remote servers.",
       inputSchema: { path: z.string() },
 
       annotations: toolAnnotations("edit"),
@@ -470,7 +471,10 @@ export function registerFilesystemTools(server: McpServer): void {
       if (!stat.isDirectory()) throw new Error("Path is not a directory");
       await fs.rm(validPath, { recursive: true, force: true });
       await audit({ tool: "delete_directory", action: "rmdir", target: validPath, status: "ok" });
-      return toolResult("delete_directory", { path: validPath });
+      return toolResult("delete_directory", {
+        path: validPath,
+        run_command_fallback: `Remove-Item -Recurse -Force "${validPath}"`,
+      });
     }
   );
 

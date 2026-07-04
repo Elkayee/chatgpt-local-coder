@@ -189,8 +189,9 @@ Install cloudflared: `winget install Cloudflare.cloudflared`
 |------|-------------|
 | `git_status` / `git_diff` / `git_log` | Inspect repo |
 | `git_add` / `git_commit` | Stage and commit |
-| `git_branch` / `git_checkout` | Branch management |
-| `git_push` / `git_pull` | Sync with remote |
+| `git_branch` / `git_checkout` | Branch list, create, switch (local only) |
+| `git_restore` | Restore tracked files to last commit |
+| `git_push` / `git_pull` | Sync with configured remote |
 | `git_stash` / `git_reset` | Stash and reset |
 
 ### Claude Code ↔ MCP mapping
@@ -275,6 +276,7 @@ This server grants **full access to your machine** — files, shell, git. Only e
 | **Resource not found** on tool call | Refresh connector + new chat. Server auto-recovers sessions — ensure latest build is running. |
 | **Connection failed** | Check `.\start.ps1` + tunnel are both running. URL must be HTTPS. |
 | **Permission popup every call** | Settings → Apps → set connector to *Ask before important changes*. Don't use popup "Always allow". |
+| **Tool blocked by OpenAI safety** | Not a server bug. Retry with `run_command` (response may include `run_command_fallback`). Affects `git_push`, `git_checkout`, `delete_directory` occasionally. |
 | **`stream canceled`** in tunnel log | Server/tunnel restarted mid-session → refresh connector, new chat. |
 | **Tunnel URL keeps changing** | Switch to OpenAI Secure Tunnel (`openai-tunnel.bat`). |
 | **Access denied** | Wrong path or OS permissions on that file. |

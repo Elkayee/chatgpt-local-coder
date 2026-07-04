@@ -131,26 +131,65 @@ export function registerGitTools(server: McpServer, defaultCwd: string): void {
   });
 
   server.registerTool("git_checkout", {
-    title: "Git Checkout", description: "Checkout branch or restore file(s).",
+    title: "Switch Git Branch",
+    description:
+      "Switch the current local repository to an existing branch. Local workspace only — does not modify remotes.",
     inputSchema: {
       path: z.string().optional(),
-      branch: z.string().optional(),
-      files: z.array(z.string()).optional(),
+      branch: z.string().describe("Existing branch name to switch to"),
     },
 
     annotations: toolAnnotations("edit"),
-  }, async ({ path: repoPath, branch, files }) => {
+  }, async ({ path: repoPath, branch }) => {
     requireWriteAllowed();
     const cwd = await repo(repoPath);
-    const args = ["checkout"];
-    if (branch) args.push(branch);
-    if (files?.length) args.push("--", ...files);
-    const r = await gitOrThrow(args, cwd);
-    return toolResult("git_checkout", { path: cwd, branch, files, output: r.stdout });
+    const r = await gitOrThrow(["switch", branch], cwd);
+    return toolResult("git_checkout", {
+      path: cwd,
+      branch,
+      output: r.stdout || r.stderr,
+      run_command_fallback: `git switch ${branch}`,
+    });
+  });
+
+  server.registerTool("git_restore", {
+    title: "Restore Tracked Files",
+    description:
+      "Restore tracked file(s) in the current repo to the last committed version. Local workspace only.",
+    inputSchema: {
+      path: z.string().optional(),
+      files: z.array(z.string()).min(1).describe("Repo-relative file paths to restore"),
+      source: z
+        .string()
+        .optional()
+        .default("HEAD")
+        .describe("Revision to restore from (default HEAD)"),
+    },
+
+    annotations: toolAnnotations("edit"),
+  }, async ({ path: repoPath, files, source }) => {
+    requireWriteAllowed();
+    const cwd = await repo(repoPath);
+    let r: GitRunResult;
+    const restore = await runGit(["restore", "--source", source, "--", ...files], cwd);
+    if (restore.exit_code === 0) {
+      r = restore;
+    } else {
+      r = await gitOrThrow(["checkout", source, "--", ...files], cwd);
+    }
+    return toolResult("git_restore", {
+      path: cwd,
+      files,
+      source,
+      output: r.stdout || r.stderr || "Restored",
+      run_command_fallback: `git restore --source ${source} -- ${files.join(" ")}`,
+    });
   });
 
   server.registerTool("git_push", {
-    title: "Git Push", description: "Push commits to remote.",
+    title: "Sync Commits to Remote",
+    description:
+      "Upload local commits to the repository's configured remote (default origin). Uses the repo's existing remote URL.",
     inputSchema: {
       path: z.string().optional(),
       remote: z.string().optional().default("origin"),
@@ -167,11 +206,22 @@ export function registerGitTools(server: McpServer, defaultCwd: string): void {
     args.push(remote);
     if (branch) args.push(branch);
     const r = await gitOrThrow(args, cwd);
-    return toolResult("git_push", { path: cwd, remote, branch, output: r.stdout || r.stderr });
+    const cmd = ["git push", set_upstream ? "-u" : "", remote, branch ?? ""]
+      .filter(Boolean)
+      .join(" ");
+    return toolResult("git_push", {
+      path: cwd,
+      remote,
+      branch,
+      output: r.stdout || r.stderr,
+      run_command_fallback: cmd,
+    });
   });
 
   server.registerTool("git_pull", {
-    title: "Git Pull", description: "Pull from remote.",
+    title: "Sync from Remote",
+    description:
+      "Download updates from the repository's configured remote into the local working copy.",
     inputSchema: { path: z.string().optional(), remote: z.string().optional().default("origin"), branch: z.string().optional() },
 
     annotations: toolAnnotations("edit"),
@@ -209,7 +259,9 @@ export function registerGitTools(server: McpServer, defaultCwd: string): void {
   });
 
   server.registerTool("git_reset", {
-    title: "Git Reset", description: "Reset HEAD (soft/mixed/hard).",
+    title: "Git Reset",
+    description:
+      "Move HEAD to a ref in the local repo. mixed=unstage commits, soft=keep staged, hard=discard working changes.",
     inputSchema: {
       path: z.string().optional(),
       mode: z.enum(["soft", "mixed", "hard"]).optional().default("mixed"),

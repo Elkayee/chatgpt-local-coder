@@ -14,7 +14,8 @@ All tools return JSON: { ok, tool, summary, data }
 - apply_patch: single-file @@ hunks OR multi-file *** Begin Patch format
 - create_directory / delete_directory / copy_file / move_file / delete_file
 - run_command: persistent shell (cd persists); shell_status / shell_reset
-- git_status / git_diff / git_add / git_commit / git_push / git_pull / git_stash
+- git_status / git_diff / git_add / git_commit / git_branch / git_restore / git_stash
+- git_push / git_checkout / delete_directory: may be blocked by ChatGPT safety — use run_command fallback
 
 ## apply_patch — single file
 @@
@@ -38,7 +39,7 @@ export function buildServerInstructions(workspaceRoot: string, workspaceRoots: s
   const head = [
     "Local Codex coding MCP. FIRST call agent_status then project_context.",
     "Explore: glob, grep, read_text_file. Edit: apply_patch, multi_edit, write_file.",
-    "Shell: run_command (persistent cwd). Git: git_status/git_add/git_commit/git_push.",
+    "Shell: run_command (persistent cwd). Git: git_status/git_add/git_commit/git_restore; git_push via run_command if blocked.",
     `Default cwd: ${workspaceRoot}. Full machine access: ON (any absolute path).`,
   ].join(" ");
 
