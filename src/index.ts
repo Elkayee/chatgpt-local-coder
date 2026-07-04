@@ -1,0 +1,232 @@
+#!/usr/bin/env node
+
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import path from "path";
+
+import {
+  setDefaultCwd,
+  getDefaultCwd,
+  getFullDiskAccess,
+} from "./lib/path-security.js";
+import {
+  createSessionManager,
+  extractRequestId,
+  isInitializeRequest,
+} from "./lib/mcp-session-manager.js";
+
+const PORT = parseInt(process.env.PORT || "3000", 10);
+const SHELL_TIMEOUT = parseInt(process.env.SHELL_TIMEOUT || "120", 10);
+const SESSION_RECOVERY =
+  (process.env.MCP_SESSION_RECOVERY || "true").toLowerCase() !== "false";
+
+function splitWorkspaceEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(";")
+    .map((p) => p.trim().replace(/^['\"]|['\"]$/g, ""))
+    .filter(Boolean);
+}
+
+function resolveWorkspaceRoots(): string[] {
+  const configuredRoots = [
+    ...splitWorkspaceEnv(process.env.WORKSPACE_PATH || process.cwd()),
+    ...splitWorkspaceEnv(process.env.EXTRA_WORKSPACE_PATHS),
+    ...splitWorkspaceEnv(process.env.WORKSPACE_PATHS),
+    ...splitWorkspaceEnv(process.env.ALLOWED_WORKSPACE_PATHS),
+  ];
+
+  const roots = configuredRoots.map((p) => path.resolve(p));
+  return [...new Set(roots)];
+}
+
+const workspaceRoots = resolveWorkspaceRoots();
+const workspaceRoot = workspaceRoots[0] || process.cwd();
+setDefaultCwd(workspaceRoot);
+
+const sessionManager = createSessionManager({
+  workspaceRoot,
+  shellTimeout: SHELL_TIMEOUT,
+  workspaceRoots,
+  port: PORT,
+});
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: "50mb" }));
+app.use((req, res, next) => {
+  const started = Date.now();
+  res.on("finish", () => {
+    const duration = Date.now() - started;
+    const sessionId = req.headers["mcp-session-id"];
+    const sessionInfo = sessionId ? ` session=${String(sessionId).slice(0, 8)}...` : "";
+    console.log(`[HTTP] ${req.method} ${req.path} ${res.statusCode} ${duration}ms${sessionInfo}`);
+  });
+  next();
+});
+
+// ChatGPT co the goi "/" hoac "/mcp" — ho tro ca hai
+const MCP_PATHS = ["/", "/mcp"];
+
+app.get("/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    name: "codex-mcp-server",
+    workspace: workspaceRoot,
+    defaultCwd: getDefaultCwd(),
+    fullMachineAccess: true,
+    fullDiskAccess: getFullDiskAccess(),
+    activeSessions: sessionManager.count(),
+    sessionRecovery: SESSION_RECOVERY,
+    mcpEndpoints: MCP_PATHS,
+  });
+});
+
+async function handleMcpPost(req: express.Request, res: express.Response): Promise<void> {
+  try {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const requestId = extractRequestId(req.body);
+
+    const existing = sessionId ? sessionManager.get(sessionId) : undefined;
+    if (existing) {
+      await sessionManager.handleExisting(existing, req, res, req.body);
+      return;
+    }
+
+    if (isInitializeRequest(req.body)) {
+      if (sessionId) {
+        console.log(`[MCP] Re-initialize with stale session header: ${sessionId}`);
+      }
+      await sessionManager.createNew(req, res, req.body);
+      return;
+    }
+
+    if (sessionId) {
+      if (SESSION_RECOVERY) {
+        const recovered = await sessionManager.tryRecoverStale(
+          sessionId,
+          req,
+          res,
+          req.body
+        );
+        if (recovered) return;
+      }
+      sessionManager.sendSessionNotFound(res, requestId);
+      return;
+    }
+
+    sessionManager.sendBadRequest(
+      res,
+      "Bad Request: Mcp-Session-Id header is required",
+      requestId
+    );
+  } catch (error) {
+    console.log("[MCP] Error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal server error" },
+        id: extractRequestId(req.body),
+      });
+    }
+  }
+}
+
+function handleStaleSession(
+  req: express.Request,
+  res: express.Response,
+  sessionId: string | undefined
+): boolean {
+  if (!sessionId || sessionManager.get(sessionId)) {
+    return false;
+  }
+  sessionManager.sendSessionNotFound(res);
+  return true;
+}
+
+async function handleMcpGet(req: express.Request, res: express.Response): Promise<void> {
+  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  if (handleStaleSession(req, res, sessionId)) return;
+
+  if (!sessionId) {
+    sessionManager.sendBadRequest(res, "Bad Request: Mcp-Session-Id header is required");
+    return;
+  }
+
+  const session = sessionManager.get(sessionId);
+  if (!session) {
+    sessionManager.sendSessionNotFound(res);
+    return;
+  }
+
+  await sessionManager.handleExisting(session, req, res, undefined);
+}
+
+async function handleMcpDelete(req: express.Request, res: express.Response): Promise<void> {
+  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  if (handleStaleSession(req, res, sessionId)) return;
+
+  if (!sessionId) {
+    sessionManager.sendBadRequest(res, "Bad Request: Mcp-Session-Id header is required");
+    return;
+  }
+
+  const session = sessionManager.get(sessionId);
+  if (!session) {
+    sessionManager.sendSessionNotFound(res);
+    return;
+  }
+
+  await sessionManager.handleExisting(session, req, res, undefined);
+}
+
+for (const mcpPath of MCP_PATHS) {
+  app.post(mcpPath, handleMcpPost);
+  app.get(mcpPath, handleMcpGet);
+  app.delete(mcpPath, handleMcpDelete);
+}
+
+sessionManager.startCleanup();
+
+const server = app.listen(PORT, () => {
+  console.log("");
+  console.log("========================================");
+  console.log("  Codex MCP Server");
+  console.log("========================================");
+  console.log(`  Local:     http://localhost:${PORT}`);
+  console.log(`  MCP:       http://localhost:${PORT}/`);
+  console.log(`  MCP alt:   http://localhost:${PORT}/mcp`);
+  console.log(`  Health:    http://localhost:${PORT}/health`);
+  console.log(`  Default cwd: ${workspaceRoot}`);
+  console.log(`  Full machine access: ON (no path restrictions)`);
+  console.log(`  Session recovery: ${SESSION_RECOVERY ? "ON" : "OFF"}`);
+  console.log(`  PID:       ${process.pid}`);
+  console.log("========================================");
+  console.log("  Dang chay... (Ctrl+C de dung)");
+  console.log("========================================");
+  console.log("");
+});
+
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`\n[LOI] Port ${PORT} da co server khac dang chay!`);
+    console.error("Chay lenh sau de tim process:");
+    console.error(`  netstat -ano | findstr ":${PORT}"`);
+    console.error("Hoac dung: .\\stop.bat de tat server cu\n");
+  } else {
+    console.error("\n[LOI] Khong the khoi dong server:", err.message, "\n");
+  }
+  process.exit(1);
+});
+
+process.on("SIGINT", () => {
+  console.log("\n[DUNG] Server dang tat...");
+  sessionManager.stopCleanup();
+  server.close(() => process.exit(0));
+});
+
+// Tranh process tu tat khi stdin dong (Windows + .bat)
+if (process.stdin.isTTY) {
+  process.stdin.resume();
+}

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.mcp-audit.log
+.tool-test-tmp/
+bin/
+profiles/
+.env
+terminals/
+agent-tools/
+mcps/
+log_console.txt
+*.log
+.DS_Store
+Thumbs.db
