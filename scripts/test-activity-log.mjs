@@ -34,4 +34,16 @@ if (since) {
   assert.ok(newer.length < all.length);
 }
 
+// error logging with message
+logMcpRequest(
+  { method: "tools/call", params: { name: "write_file", arguments: { path: "/x" } } },
+  "sess-err",
+  2,
+  400,
+  "Bad Request: Server not initialized"
+);
+const errEntry = getRecentActivity(3).find((e) => e.status === "error" && e.tool === "write_file");
+assert.ok(errEntry, "expected error activity entry");
+assert.equal(errEntry.summary, "Bad Request: Server not initialized");
+
 console.log("activity-log: ok");

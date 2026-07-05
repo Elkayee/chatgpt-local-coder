@@ -11,13 +11,18 @@ import {
   getFullDiskAccess,
 } from "./lib/path-security.js";
 import {
+  consumeSessionTransportError,
   createSessionManager,
   extractRequestId,
   isInitializeRequest,
 } from "./lib/mcp-session-manager.js";
 import { initUpstreamManager } from "./lib/mcp-upstream-manager.js";
 import { startAdminServer } from "./admin/server.js";
-import { logMcpRequest } from "./lib/activity-log.js";
+import { logMcpHttpEvent, logMcpRequest } from "./lib/activity-log.js";
+import {
+  formatProjectMemoryForInstructions,
+  loadProjectMemory,
+} from "./lib/project-memory.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ADMIN_PORT = parseInt(process.env.ADMIN_PORT || "3001", 10);
@@ -51,26 +56,67 @@ setDefaultCwd(workspaceRoot);
 
 const upstreamManager = await initUpstreamManager();
 
+const projectMemoryBundle = await loadProjectMemory(workspaceRoot);
+const projectMemoryInstructions = formatProjectMemoryForInstructions(projectMemoryBundle);
+if (projectMemoryBundle.sections.length > 0) {
+  console.log(
+    `[MCP] Project memory: ${projectMemoryBundle.sections.length} file(s) from ${workspaceRoot} (${projectMemoryBundle.total_bytes} bytes)`
+  );
+} else {
+  console.log(
+    `[MCP] Project memory: no CLAUDE.md/AGENTS.md at ${workspaceRoot} — set WORKSPACE_PATH to your project root`
+  );
+}
+
 const sessionManager = createSessionManager({
   workspaceRoot,
   shellTimeout: SHELL_TIMEOUT,
   workspaceRoots,
   port: PORT,
+  projectMemoryInstructions,
 });
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
+const MCP_PATHS_SET = new Set(["/", "/mcp"]);
+
 app.use((req, res, next) => {
   const started = Date.now();
-  const isMcp = req.method === "POST" && (req.path === "/" || req.path === "/mcp");
+  const isMcpRoute = MCP_PATHS_SET.has(req.path);
   res.on("finish", () => {
     const duration = Date.now() - started;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const sessionInfo = sessionId ? ` session=${String(sessionId).slice(0, 8)}...` : "";
-    if (isMcp && req.body) {
-      logMcpRequest(req.body, sessionId, duration, res.statusCode);
-    } else if (!isMcp) {
+
+    if (req.method === "POST" && isMcpRoute) {
+      const transportError =
+        consumeSessionTransportError(sessionId) ||
+        (typeof res.locals.mcpError === "string" ? res.locals.mcpError : undefined);
+      logMcpRequest(req.body, sessionId, duration, res.statusCode, transportError);
+      return;
+    }
+
+    if (isMcpRoute && res.statusCode >= 400) {
+      const reason =
+        (typeof res.locals.mcpError === "string" ? res.locals.mcpError : undefined) ||
+        (res.statusCode === 404
+          ? "Session not found"
+          : res.statusCode === 400
+            ? "Bad Request (missing Mcp-Session-Id or invalid state)"
+            : `HTTP ${res.statusCode}`);
+      logMcpHttpEvent({
+        method: req.method,
+        path: req.path,
+        httpStatus: res.statusCode,
+        durationMs: duration,
+        sessionId,
+        errorMessage: reason,
+      });
+      return;
+    }
+
+    if (!isMcpRoute) {
       console.log(`[HTTP] ${req.method} ${req.path} ${res.statusCode} ${duration}ms${sessionInfo}`);
     }
   });
@@ -91,6 +137,11 @@ app.get("/health", (_req, res) => {
     activeSessions: sessionManager.count(),
     sessionRecovery: SESSION_RECOVERY,
     mcpEndpoints: MCP_PATHS,
+    projectMemory: {
+      root: projectMemoryBundle.root,
+      files: projectMemoryBundle.sections.map((s) => s.path),
+      bytes: projectMemoryBundle.total_bytes,
+    },
   });
 });
 

@@ -98,15 +98,24 @@ See [Tunnel options](#-tunnel-options) below. You need a **public HTTPS** URL po
 
 3. **Create** → verify tools appear in the list
 
-### 4. Use in chat
+### 4. Use in chat — **must tag the connector**
 
-1. **New chat** → **+** → **More** → select **Local Coder**
-2. Example prompts:
-   - *"Read package.json and explain the dependencies"*
-   - *"Run npm test and fix any failures"*
-   - *"Find all TODO comments with grep and summarize"*
+Every message that should use local tools **must include the connector**. If you skip this, ChatGPT only uses built-in tools, may show *"Looking for available tools"* / *"Đang tìm các công cụ có sẵn"*, then **"Error in message stream"** / **"Lỗi trong luồng tin nhắn"** — with **no error in server logs** (the MCP server was never called).
 
-> **Tip:** After server updates or restarts → **Refresh** the connector and start a **new chat**.  
+**How to tag (pick one):**
+
+1. **Before sending:** **New chat** → **+** (tools) → **More** → enable **Local Coder** (connector stays on for that chat).
+2. **In the message:** type **`@`** and choose **Local Coder** (or your connector name) so it appears as a pill/chip above the input.
+
+Then send your prompt. You should see tool permission prompts or MCP activity — not a dead stream with no server log.
+
+Example prompts (after tagging):
+
+- *"Read package.json and explain the dependencies"*
+- *"Run npm test and fix any failures"*
+- *"Find all TODO comments with grep and summarize"*
+
+> **Tip:** After server updates or restarts → **Refresh** the connector and start a **new chat** (re-tag the connector).  
 > **Avoid** clicking **"Always allow"** on permission popups — it can reset the MCP session. Configure permissions in **Settings → Apps** instead.
 
 ## 🌐 Tunnel options
@@ -223,7 +232,7 @@ OPENAI_TUNNEL_API_KEY=
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WORKSPACE_PATH` | `cwd` | Default directory for relative paths and shell |
+| `WORKSPACE_PATH` | `cwd` | **Your project root** (like `cd` before `claude`). Auto-loads `CLAUDE.md` / `AGENTS.md` into MCP instructions |
 | `CHATGPT_AUTO_APPROVE` | `true` | Tool annotations to reduce ChatGPT popups |
 | `MCP_SESSION_RECOVERY` | `true` | Auto-recover stale sessions after restart |
 | `SHELL_TIMEOUT` | `120` | Max seconds for `run_command` |
@@ -273,6 +282,7 @@ This server grants **full access to your machine** — files, shell, git. Only e
 
 | Problem | Fix |
 |---------|-----|
+| **"Error in message stream"** / **"Lỗi trong luồng tin nhắn"** right after *"Looking for tools"* — **no server log** | You did **not tag the connector**. New chat → **+** → **More** → enable connector, or type **`@Local Coder`** in the message. Then retry. |
 | **Resource not found** on tool call | Refresh connector + new chat. Server auto-recovers sessions — ensure latest build is running. |
 | **Connection failed** | Check `.\start.ps1` + tunnel are both running. URL must be HTTPS. |
 | **Permission popup every call** | Settings → Apps → set connector to *Ask before important changes*. Don't use popup "Always allow". |
@@ -316,6 +326,10 @@ npm install && npm run build
 
 **ChatGPT:** Settings → Connectors → tạo connector → chọn tunnel → Refresh → chat mới.
 
-**Lưu ý:** Không bấm **"Luôn cho phép"** trên popup — cấu hình quyền ở Settings → Apps. Sau khi restart server: Refresh connector + mở chat mới.
+**Bắt buộc tag connector mỗi chat:** Chat mới → **+** → **More** → bật connector, hoặc gõ **`@`** + tên connector trong ô chat. Nếu không tag, ChatGPT báo *"Đang tìm các công cụ có sẵn"* rồi *"Lỗi trong luồng tin nhắn"* — **server không có log lỗi** vì MCP chưa được gọi.
+
+**WORKSPACE_PATH:** đặt đúng thư mục project (không phải thư mục `chatgpt-local-coder`). Server tự đọc `CLAUDE.md` / `AGENTS.md` giống Claude Code.
+
+**Lưu ý:** Không bấm **"Luôn cho phép"** trên popup — cấu hình quyền ở Settings → Apps. Sau khi restart server: Refresh connector + mở chat mới + tag lại connector.
 
 Chi tiết cho AI agent: [AGENTS.md](AGENTS.md)

@@ -38,19 +38,28 @@ All tools return JSON: { ok, tool, summary, data }
 Full machine access — use ANY absolute path (C:\\, D:\\, etc.). Relative paths resolve from default cwd.
 `.trim();
 
-export function buildServerInstructions(workspaceRoot: string, workspaceRoots: string[], fullDiskAccess: boolean): string {
+export function buildServerInstructions(
+  workspaceRoot: string,
+  workspaceRoots: string[],
+  _fullDiskAccess: boolean,
+  projectMemory?: string
+): string {
   const head = [
-    "Local Codex coding MCP. FIRST call agent_status then project_context.",
+    "Local Codex coding MCP (Claude Code-style). Default project cwd is WORKSPACE_PATH.",
+    "Project memory below is auto-loaded from CLAUDE.md/AGENTS.md — treat it as ground truth.",
+    "If the user names a different project path, call project_context(path) then work under that path.",
     "Explore: glob, grep, read_text_file. Edit: apply_patch, multi_edit, write_file.",
-    "Shell: run_command (persistent cwd). Rewind: rewind action=list|restore. Git: git_status/git_add/git_commit/git_restore; git_push via run_command if blocked.",
+    "Shell: run_command (persistent cwd). Rewind: rewind action=list|restore.",
     `Default cwd: ${workspaceRoot}. Full machine access: ON (any absolute path).`,
   ].join(" ");
 
   const tail = [
-    `Allowed roots:\n${workspaceRoots.map((r) => `- ${r}`).join("\n")}`,
+    `Workspace roots:\n${workspaceRoots.map((r) => `- ${r}`).join("\n")}`,
     "Long commands: start_process + process_output. Paths: absolute or workspace-relative.",
-    "See agent_status output for full quickstart guide.",
+    "Call agent_status for tool cheat sheet; project_context for another repo.",
   ].join("\n");
 
-  return `${head}\n\n${tail}`;
+  const memory = projectMemory?.trim();
+  if (!memory) return `${head}\n\n${tail}`;
+  return `${head}\n\n${memory}\n\n${tail}`;
 }

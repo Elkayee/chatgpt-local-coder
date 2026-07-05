@@ -14,7 +14,8 @@ export function createMcpServer(
   shellTimeout: number,
   workspaceRoots: string[] = [workspaceRoot],
   fullDiskAccess = false,
-  upstreamManager?: McpUpstreamManager
+  upstreamManager?: McpUpstreamManager,
+  projectMemoryInstructions?: string
 ): McpServer {
   const server = new McpServer(
     {
@@ -26,7 +27,12 @@ export function createMcpServer(
         logging: {},
         tools: { listChanged: true },
       },
-      instructions: buildServerInstructions(workspaceRoot, workspaceRoots, fullDiskAccess),
+      instructions: buildServerInstructions(
+        workspaceRoot,
+        workspaceRoots,
+        fullDiskAccess,
+        projectMemoryInstructions
+      ),
     }
   );
 

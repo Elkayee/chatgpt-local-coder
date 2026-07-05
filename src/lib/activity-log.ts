@@ -83,6 +83,19 @@ export function getRecentActivity(limit = 100, sinceId?: string): ActivityEntry[
 function writeConsole(entry: ActivityEntry): void {
   const sid = entry.session_id ? ` session=${entry.session_id.slice(0, 8)}` : "";
   const dur = entry.duration_ms != null ? ` ${entry.duration_ms}ms` : "";
+  const isError = entry.status === "error" || entry.status === "blocked";
+
+  if (isError) {
+    const label =
+      entry.tool ? `tools/call ${entry.tool}` : entry.action || entry.kind || "mcp";
+    const detail = entry.summary || entry.target || "";
+    const http = entry.details?.http_status != null ? ` HTTP ${entry.details.http_status}` : "";
+    console.warn(
+      `[MCP ERROR]${http} ${label}${detail ? ` — ${detail}` : ""}${dur}${sid}`
+    );
+    return;
+  }
+
   const status = entry.status ? ` [${entry.status}]` : "";
 
   if (entry.kind === "tool" && entry.tool) {
@@ -94,12 +107,17 @@ function writeConsole(entry: ActivityEntry): void {
   if (entry.kind === "mcp") {
     const label = entry.tool ? `tools/call ${entry.tool}` : entry.action || "request";
     const extra = entry.summary ? ` — ${entry.summary}` : "";
-    console.log(`[MCP]${status} ${label}${extra}${dur}${sid}`);
+    const discovery =
+      entry.action === "tools/list" && entry.details?.tool_count != null
+        ? ` (${entry.details.tool_count} tools)`
+        : "";
+    console.log(`[MCP]${status} ${label}${discovery}${extra}${dur}${sid}`);
     return;
   }
 
   if (entry.kind === "session") {
-    console.log(`[MCP] session ${entry.action || "event"}${sid}`);
+    const extra = entry.summary ? ` — ${entry.summary}` : "";
+    console.log(`[MCP] session ${entry.action || "event"}${extra}${sid}`);
     return;
   }
 }
@@ -138,14 +156,66 @@ export async function loadAuditHistory(limit = 80): Promise<ActivityEntry[]> {
   }
 }
 
+export function logMcpHttpEvent(opts: {
+  method: string;
+  path: string;
+  httpStatus: number;
+  durationMs: number;
+  sessionId?: string;
+  rpcMethod?: string;
+  tool?: string;
+  errorMessage?: string;
+  summary?: string;
+}): void {
+  const isError = opts.httpStatus >= 400;
+  const label = opts.tool
+    ? `tools/call ${opts.tool}`
+    : opts.rpcMethod || `${opts.method} ${opts.path}`;
+  const summary =
+    opts.errorMessage ||
+    opts.summary ||
+    (isError ? `HTTP ${opts.httpStatus}` : undefined);
+
+  appendActivity({
+    kind: opts.rpcMethod === "initialize" ? "session" : "mcp",
+    tool: opts.tool,
+    action: opts.rpcMethod || `${opts.method} ${opts.path}`,
+    session_id: opts.sessionId,
+    client: "chatgpt",
+    status: isError ? "error" : "ok",
+    duration_ms: opts.durationMs,
+    summary,
+    details: { http_status: opts.httpStatus, method: opts.method, path: opts.path },
+  });
+}
+
 export function logMcpRequest(
   body: unknown,
   sessionId: string | undefined,
   durationMs: number,
-  httpStatus: number
+  httpStatus: number,
+  errorMessage?: string
 ): void {
-  if (typeof body !== "object" || body === null) return;
+  if (typeof body !== "object" || body === null) {
+    if (httpStatus >= 400) {
+      logMcpHttpEvent({
+        method: "POST",
+        path: "/mcp",
+        httpStatus,
+        durationMs,
+        sessionId,
+        errorMessage,
+      });
+    }
+    return;
+  }
   const rpc = body as { method?: string; params?: { name?: string; arguments?: unknown; protocolVersion?: string } };
+  const isError = httpStatus >= 400;
+  const argSummary =
+    rpc.method === "tools/call" && rpc.params?.name
+      ? summarizeToolArgs(rpc.params.name, rpc.params.arguments)
+      : undefined;
+  const summary = errorMessage || argSummary;
 
   if (rpc.method === "tools/call" && rpc.params?.name) {
     const tool = rpc.params.name;
@@ -155,10 +225,14 @@ export function logMcpRequest(
       action: "tools/call",
       session_id: sessionId,
       client: "chatgpt",
-      status: httpStatus >= 400 ? "error" : "ok",
+      status: isError ? "error" : "ok",
       duration_ms: durationMs,
-      summary: summarizeToolArgs(tool, rpc.params.arguments),
-      details: { arguments: rpc.params.arguments },
+      summary,
+      details: {
+        http_status: httpStatus,
+        arguments: rpc.params.arguments,
+        ...(errorMessage ? { error: errorMessage } : {}),
+      },
     });
     return;
   }
@@ -169,8 +243,24 @@ export function logMcpRequest(
       action: "initialize",
       session_id: sessionId,
       client: "chatgpt",
-      status: httpStatus >= 400 ? "error" : "ok",
+      status: isError ? "error" : "ok",
       duration_ms: durationMs,
+      summary: errorMessage,
+      details: { http_status: httpStatus },
+    });
+    return;
+  }
+
+  if (rpc.method === "tools/list") {
+    appendActivity({
+      kind: "mcp",
+      action: "tools/list",
+      session_id: sessionId,
+      client: "chatgpt",
+      status: isError ? "error" : "ok",
+      duration_ms: durationMs,
+      summary: errorMessage || (isError ? `HTTP ${httpStatus}` : "discovery"),
+      details: { http_status: httpStatus, phase: "connector_discovery" },
     });
     return;
   }
@@ -181,8 +271,10 @@ export function logMcpRequest(
       action: rpc.method,
       session_id: sessionId,
       client: "chatgpt",
-      status: httpStatus >= 400 ? "error" : "ok",
+      status: isError ? "error" : "ok",
       duration_ms: durationMs,
+      summary: errorMessage,
+      details: { http_status: httpStatus },
     });
   }
 }

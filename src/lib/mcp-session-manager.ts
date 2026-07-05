@@ -6,12 +6,20 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpServer } from "../server-factory.js";
 import { getUpstreamManager } from "./mcp-upstream-manager.js";
 
+
 const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 const SESSION_TTL_MS = parseInt(process.env.MCP_SESSION_TTL_MS || "86400000", 10); // 24h
 const SESSION_CLEANUP_INTERVAL_MS = parseInt(
   process.env.MCP_SESSION_CLEANUP_MS || "300000",
   10
 ); // 5m
+const SESSION_DELETE_GRACE_MS = parseInt(
+  process.env.MCP_SESSION_DELETE_GRACE_MS || "45000",
+  10
+); // keep session after DELETE so in-flight tool calls can finish
+
+const lastTransportErrors: Record<string, string> = {};
+const sessionOpChains = new Map<string, Promise<void>>();
 
 export interface McpSession {
   transport: StreamableHTTPServerTransport;
@@ -25,6 +33,7 @@ export interface SessionManagerConfig {
   shellTimeout: number;
   workspaceRoots: string[];
   port: number;
+  projectMemoryInstructions?: string;
 }
 
 export interface SessionManager {
@@ -80,23 +89,67 @@ async function loopbackMcpPost(
   };
 }
 
+export function consumeSessionTransportError(sessionId?: string): string | undefined {
+  if (!sessionId || !lastTransportErrors[sessionId]) return undefined;
+  const message = lastTransportErrors[sessionId];
+  delete lastTransportErrors[sessionId];
+  return message;
+}
+
+async function enqueueSessionOp(sessionId: string, op: () => Promise<void>): Promise<void> {
+  const prev = sessionOpChains.get(sessionId) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(op);
+  sessionOpChains.set(sessionId, run);
+  try {
+    await run;
+  } finally {
+    if (sessionOpChains.get(sessionId) === run) {
+      sessionOpChains.delete(sessionId);
+    }
+  }
+}
+
 export function createSessionManager(config: SessionManagerConfig): SessionManager {
   const sessions: Record<string, McpSession> = {};
   const pendingRecoveries: Record<string, McpSession> = {};
+  const deleteGraceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
   let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   function touch(sessionId: string): void {
+    cancelDeleteGrace(sessionId);
     const session = sessions[sessionId];
     if (session) {
       session.lastAccessedAt = Date.now();
     }
   }
 
+  function cancelDeleteGrace(sessionId: string): void {
+    const timer = deleteGraceTimers[sessionId];
+    if (!timer) return;
+    clearTimeout(timer);
+    delete deleteGraceTimers[sessionId];
+  }
+
+  function scheduleDeleteGrace(sessionId: string): void {
+    cancelDeleteGrace(sessionId);
+    console.log(
+      `[MCP] Session DELETE — giữ ${SESSION_DELETE_GRACE_MS / 1000}s để tool call đang chạy: ${sessionId}`
+    );
+    deleteGraceTimers[sessionId] = setTimeout(() => {
+      delete deleteGraceTimers[sessionId];
+      removeSession(sessionId, "client DELETE (grace expired)");
+    }, SESSION_DELETE_GRACE_MS);
+    deleteGraceTimers[sessionId].unref?.();
+  }
+
   function removeSession(sessionId: string, reason: string): void {
+    cancelDeleteGrace(sessionId);
     const session = sessions[sessionId];
     if (!session) return;
     getUpstreamManager().unregisterMcpServer(session.server);
     delete sessions[sessionId];
+    delete lastTransportErrors[sessionId];
+    sessionOpChains.delete(sessionId);
     console.log(`[MCP] Session removed (${reason}): ${sessionId}`);
   }
 
@@ -110,7 +163,8 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
       config.shellTimeout,
       config.workspaceRoots,
       true,
-      getUpstreamManager()
+      getUpstreamManager(),
+      config.projectMemoryInstructions
     );
 
     const transport = new StreamableHTTPServerTransport({
@@ -130,9 +184,15 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
         console.log(`[MCP] Session initialized: ${sid}`);
       },
       onsessionclosed: (sid) => {
-        if (sid) removeSession(sid, "client DELETE");
+        if (sid) scheduleDeleteGrace(sid);
       },
     });
+
+    transport.onerror = (error) => {
+      const sid = transport.sessionId;
+      const message = error.message || String(error);
+      if (sid) lastTransportErrors[sid] = message;
+    };
 
     // Keep session alive across transient SSE disconnects; explicit DELETE cleans up.
     transport.onclose = () => {
@@ -212,18 +272,18 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
     },
 
     sendSessionNotFound(res: Response, requestId: string | number | null = null) {
+      const message =
+        "Session not found. Server restarted or connector session expired — refresh connector and open a new chat.";
+      res.locals.mcpError = message;
       res.status(404).json({
         jsonrpc: "2.0",
-        error: {
-          code: -32001,
-          message:
-            "Session not found. Server restarted or connector session expired — refresh connector and open a new chat.",
-        },
+        error: { code: -32001, message },
         id: requestId,
       });
     },
 
     sendBadRequest(res: Response, message: string, requestId: string | number | null = null) {
+      res.locals.mcpError = message;
       res.status(400).json({
         jsonrpc: "2.0",
         error: { code: -32000, message },
@@ -243,9 +303,18 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
         session = await buildSession();
       }
 
-      await session.transport.handleRequest(req, res, body);
-      const sid = session.transport.sessionId;
-      if (sid) touch(sid);
+      const sid = headerSessionId || session.transport.sessionId;
+      const run = async () => {
+        await session.transport.handleRequest(req, res, body);
+        const activeSid = session.transport.sessionId;
+        if (activeSid) touch(activeSid);
+      };
+
+      if (sid) {
+        await enqueueSessionOp(sid, run);
+      } else {
+        await run();
+      }
     },
 
     async handleExisting(
@@ -254,9 +323,17 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
       res: Response,
       body?: unknown
     ): Promise<void> {
-      const sid = session.transport.sessionId;
+      const sid =
+        session.transport.sessionId || (req.headers["mcp-session-id"] as string | undefined);
       if (sid) touch(sid);
-      await session.transport.handleRequest(req, res, body);
+      const run = async () => {
+        await session.transport.handleRequest(req, res, body);
+      };
+      if (sid) {
+        await enqueueSessionOp(sid, run);
+      } else {
+        await run();
+      }
     },
 
     async tryRecoverStale(
@@ -297,7 +374,9 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
 
       const headers = { ...req.headers, "mcp-session-id": staleSessionId };
       const patchedReq = Object.assign(req, { headers });
-      await recovered.transport.handleRequest(patchedReq, res, body);
+      await enqueueSessionOp(staleSessionId, async () => {
+        await recovered.transport.handleRequest(patchedReq, res, body);
+      });
       return true;
     },
 
