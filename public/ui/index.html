@@ -21,6 +21,7 @@
         <button class="nav-item" data-tab="servers">MCP Servers</button>
         <button class="nav-item" data-tab="import">Import</button>
         <button class="nav-item" data-tab="activity">Nhật ký</button>
+        <button class="nav-item" data-tab="project">Project</button>
         <button class="nav-item" data-tab="settings">Cài đặt</button>
         <button class="nav-item" data-tab="logs">Raw status</button>
       </nav>
@@ -101,6 +102,15 @@
           <div id="activity-feed" class="activity-feed">
             <div class="empty">Chưa có log. Gọi tool từ ChatGPT để thấy ở đây.</div>
           </div>
+        </div>
+      </section>
+
+      <section id="project" class="view">
+        <div class="panel">
+          <div class="panel-head"><h2>MCP instructions (ChatGPT context)</h2></div>
+          <p class="muted">Nội dung inject vào mỗi MCP session — CLAUDE.md, git, agent prompt.</p>
+          <div id="project-meta" class="stat-grid"></div>
+          <pre id="project-preview" class="code-block" style="max-height:420px;overflow:auto"></pre>
         </div>
       </section>
 

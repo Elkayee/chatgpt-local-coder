@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerFilesystemTools } from "./tools/filesystem.js";
 import { registerShellTools } from "./tools/shell.js";
 import { registerGitTools } from "./tools/git.js";
@@ -8,6 +9,27 @@ import { registerMcpBridgeTools } from "./tools/mcp-bridge.js";
 import { buildServerInstructions } from "./lib/quickstart.js";
 import type { McpUpstreamManager } from "./lib/mcp-upstream-manager.js";
 import { refreshProxiedTools } from "./lib/mcp-tool-proxy.js";
+import { getChatGptToolProfile, shouldExposeTool } from "./lib/tool-profile.js";
+
+const NOOP_TOOL = {
+  remove: () => {},
+  update: () => {},
+  enable: () => {},
+  disable: () => {},
+  handler: async () => ({ content: [] }),
+  enabled: false,
+} as unknown as RegisteredTool;
+
+function applyToolProfile(server: McpServer): void {
+  const profile = getChatGptToolProfile();
+  if (profile === "full") return;
+
+  const original = server.registerTool.bind(server);
+  server.registerTool = ((name, ...rest) => {
+    if (!shouldExposeTool(String(name), profile)) return NOOP_TOOL;
+    return original(name, ...rest);
+  }) as typeof server.registerTool;
+}
 
 export function createMcpServer(
   workspaceRoot: string,
@@ -35,6 +57,8 @@ export function createMcpServer(
       ),
     }
   );
+
+  applyToolProfile(server);
 
   registerFilesystemTools(server);
   registerShellTools(server, workspaceRoot, shellTimeout);

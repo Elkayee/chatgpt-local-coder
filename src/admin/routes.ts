@@ -65,6 +65,8 @@ export function createAdminRouter(manager: McpUpstreamManager, options: {
   mcpPort: number;
   pid: number;
   sessionCount: () => number;
+  instructionSummary?: () => Record<string, unknown>;
+  instructionsPreview?: () => string;
 }): Router {
   const router = Router();
   const envPath = path.resolve(process.cwd(), ".env");
@@ -81,6 +83,19 @@ export function createAdminRouter(manager: McpUpstreamManager, options: {
       full_disk_access: getFullDiskAccess(),
       upstream,
       checkpoint: getCheckpointConfig(),
+      instructions: options.instructionSummary?.() ?? null,
+    });
+  });
+
+  router.get("/api/instructions/preview", (_req, res) => {
+    const text = options.instructionsPreview?.() ?? "";
+    const summary = options.instructionSummary?.() ?? {};
+    res.json({
+      ok: true,
+      summary,
+      preview: text.slice(0, 12000),
+      truncated: text.length > 12000,
+      total_chars: text.length,
     });
   });
 

@@ -1,11 +1,14 @@
 const ENV_KEYS = [
   "WORKSPACE_PATH",
+  "EXTRA_WORKSPACE_PATHS",
   "PORT",
   "ADMIN_PORT",
   "CHATGPT_AUTO_APPROVE",
+  "CHATGPT_TOOL_PROFILE",
   "SHELL_TIMEOUT",
   "CHECKPOINT_ENABLED",
   "MCP_UPSTREAM_CONFIG",
+  "POST_EDIT_HOOKS_CONFIG",
 ];
 
 const TITLES = {
@@ -13,6 +16,7 @@ const TITLES = {
   servers: "MCP Servers",
   import: "Import",
   activity: "Nhật ký",
+  project: "Project context",
   settings: "Cài đặt",
   logs: "Raw status",
 };
@@ -95,14 +99,32 @@ function serversTable(rows, { actions = true } = {}) {
 async function loadDashboard() {
   const health = await api("/health");
   document.getElementById("conn-status").textContent = `MCP :${health.mcp_port} · ${health.active_sessions} sessions`;
+  const instr = health.instructions || {};
+  const memCount = instr.memory_files?.length ?? 0;
+  const gitBranch = instr.git?.branch || (instr.git?.is_repo === false ? "—" : "?");
   document.getElementById("stat-grid").innerHTML = `
     <div class="stat"><div class="stat-label">MCP Port</div><div class="stat-value">${health.mcp_port}</div></div>
     <div class="stat"><div class="stat-label">Sessions</div><div class="stat-value">${health.active_sessions}</div></div>
-    <div class="stat"><div class="stat-label">Upstream</div><div class="stat-value">${health.upstream?.length ?? 0}</div></div>
+    <div class="stat"><div class="stat-label">Project memory</div><div class="stat-value">${memCount} file(s)</div>
+      <div class="stat-sub">${instr.instruction_bytes ? Math.round(instr.instruction_bytes / 1024) + " KB instructions" : ""}</div></div>
+    <div class="stat"><div class="stat-label">Git branch</div><div class="stat-value" style="font-size:0.85rem">${esc(gitBranch)}</div></div>
     <div class="stat"><div class="stat-label">Workspace</div><div class="stat-value" style="font-size:0.85rem">${esc(health.default_cwd?.split(/[/\\]/).pop())}</div>
       <div class="stat-sub">${esc(health.default_cwd)}</div></div>`;
   document.getElementById("dash-servers").innerHTML = serversTable(health.upstream || [], { actions: false });
   document.getElementById("status-json").textContent = JSON.stringify(health, null, 2);
+}
+
+async function loadProject() {
+  const preview = await api("/api/instructions/preview");
+  const s = preview.summary || {};
+  document.getElementById("project-meta").innerHTML = `
+    <div class="stat"><div class="stat-label">Root</div><div class="stat-value" style="font-size:0.8rem">${esc(s.root || "—")}</div></div>
+    <div class="stat"><div class="stat-label">Memory files</div><div class="stat-value">${s.memory_files?.length ?? 0}</div></div>
+    <div class="stat"><div class="stat-label">Instructions</div><div class="stat-value">${preview.total_chars ? Math.round(preview.total_chars / 1024) + " KB" : "—"}</div></div>
+    <div class="stat"><div class="stat-label">Tool profile</div><div class="stat-value">${esc(s.tool_profile || "slim")}</div></div>
+    <div class="stat"><div class="stat-label">Git</div><div class="stat-value">${esc(s.git?.branch || "—")}</div></div>`;
+  document.getElementById("project-preview").textContent =
+    preview.preview + (preview.truncated ? "\n\n… (truncated)" : "");
 }
 
 async function loadServers() {
@@ -446,6 +468,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     document.getElementById("page-title").textContent = TITLES[btn.dataset.tab] || btn.dataset.tab;
     stopActivityStream();
     if (btn.dataset.tab === "activity") onActivityTabActive();
+    if (btn.dataset.tab === "project") loadProject().catch((e) => toast(e.message, true));
   });
 });
 
@@ -496,7 +519,7 @@ document.getElementById("import-file-btn").addEventListener("click", async () =>
 });
 
 async function refreshAll() {
-  await Promise.all([loadDashboard(), loadServers(), loadImport(), loadEnvForm()]);
+  await Promise.all([loadDashboard(), loadServers(), loadImport(), loadEnvForm(), loadProject().catch(() => {})]);
 }
 
 document.getElementById("refresh-all").addEventListener("click", () => refreshAll().catch((e) => toast(e.message, true)));

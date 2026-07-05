@@ -10,6 +10,8 @@ import { toolAnnotations } from "../lib/tool-annotations.js";
 import { MCP_QUICKSTART } from "../lib/quickstart.js";
 import { getCheckpointConfig } from "../lib/checkpoint.js";
 import { getUpstreamManager } from "../lib/mcp-upstream-manager.js";
+import { appendAutoMemory } from "../lib/auto-memory.js";
+import { loadPathRulesForFile } from "../lib/path-rules.js";
 import { toolResult } from "../lib/tool-result.js";
 
 
@@ -69,7 +71,7 @@ export function registerContextTools(server: McpServer, workspaceRoot: string): 
     {
       title: "Project Context",
       description:
-        "Call after agent_status on first use. Loads AGENTS.md, CLAUDE.md, README.md and project config so you know how to work in this repo.",
+        "Load CLAUDE.md/AGENTS.md for a project path. Use when the task targets a repo other than WORKSPACE_PATH (default project is already in MCP instructions).",
       inputSchema: {
         path: z.string().optional().describe("Project directory, defaults to primary workspace"),
         max_depth: z.number().int().min(0).max(5).optional().default(3),
@@ -102,7 +104,7 @@ export function registerContextTools(server: McpServer, workspaceRoot: string): 
     {
       title: "Agent Status",
       description:
-        "CALL THIS FIRST on every new ChatGPT session. Returns permissions, workspace roots, and a full MCP quickstart guide (tool cheat sheet + apply_patch format).",
+        "Optional: full tool cheat sheet, apply_patch format, permissions, and upstream MCP list. Default workflow is already in MCP instructions.",
       inputSchema: {},
 
       annotations: toolAnnotations("read"),
@@ -129,7 +131,44 @@ export function registerContextTools(server: McpServer, workspaceRoot: string): 
           servers: upstream,
         },
         admin_ui: `http://127.0.0.1:${process.env.ADMIN_PORT || "3001"}/ui`,
+        tool_profile: process.env.CHATGPT_TOOL_PROFILE || "slim",
       });
+    }
+  );
+
+  server.registerTool(
+    "remember",
+    {
+      title: "Remember",
+      description: "Save a note to auto memory for future ChatGPT sessions (like Claude Code MEMORY.md).",
+      inputSchema: {
+        note: z.string().describe("Short fact to remember: build command, convention, gotcha"),
+      },
+      annotations: toolAnnotations("edit"),
+    },
+    async ({ note }) => {
+      const file = await appendAutoMemory(workspaceRoot, note);
+      await audit({ tool: "remember", action: "append", target: file, status: "ok" });
+      return toolResult("remember", { saved_to: file, note }, { summary: "saved to auto memory" });
+    }
+  );
+
+  server.registerTool(
+    "load_path_rules",
+    {
+      title: "Load Path Rules",
+      description:
+        "Load .claude/rules/*.md scoped to a file path (Claude Code path-specific rules). Call after read_text_file when editing unfamiliar areas.",
+      inputSchema: {
+        path: z.string().describe("File path to match against rule paths: frontmatter"),
+      },
+      annotations: toolAnnotations("read"),
+    },
+    async ({ path: filePath }) => {
+      const validPath = await validatePath(filePath);
+      const rules = await loadPathRulesForFile(workspaceRoot, validPath);
+      await audit({ tool: "load_path_rules", action: "read", target: validPath, status: "ok", details: { rules: rules.length } });
+      return toolResult("load_path_rules", { path: validPath, rules, count: rules.length });
     }
   );
 }

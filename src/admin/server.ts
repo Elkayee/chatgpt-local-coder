@@ -15,6 +15,8 @@ export interface AdminServerOptions {
   pid: number;
   manager: McpUpstreamManager;
   sessionCount: () => number;
+  instructionSummary?: () => Record<string, unknown>;
+  instructionsPreview?: () => string;
 }
 
 export function startAdminServer(options: AdminServerOptions): Server {
@@ -32,6 +34,8 @@ export function startAdminServer(options: AdminServerOptions): Server {
     mcpPort: options.mcpPort,
     pid: options.pid,
     sessionCount: options.sessionCount,
+    instructionSummary: options.instructionSummary,
+    instructionsPreview: options.instructionsPreview,
   }));
 
   return app.listen(options.port, host, () => {

@@ -8,6 +8,7 @@ import { requireWriteAllowed } from "../lib/permissions.js";
 import { applyMultiFilePatch, applyUnifiedPatchToText, buildSimpleDiff, isMultiFilePatch, parseMultiFilePatch } from "../lib/patch.js";
 import { checkpointBefore } from "../lib/checkpoint.js";
 import { toolAnnotations } from "../lib/tool-annotations.js";
+import { enrichAfterEdit } from "../lib/edit-enrichment.js";
 import { toolResult } from "../lib/tool-result.js";
 import { globFiles } from "../lib/glob-search.js";
 import { grepSearch } from "../lib/grep-search.js";
@@ -77,7 +78,7 @@ export function registerFilesystemTools(server: McpServer): void {
     "read_text_file",
     {
       title: "Read Text File",
-      description: "Read file contents as text. Use offset+limit (Claude Read-style), or head/tail for partial reads.",
+      description: "Read a file before editing. Use offset+limit for partial reads (1-based line numbers). Always read files you plan to patch.",
       inputSchema: {
         path: z.string(),
         offset: z.number().int().positive().optional().describe("1-based line number to start reading"),
@@ -167,7 +168,11 @@ export function registerFilesystemTools(server: McpServer): void {
       await fs.mkdir(path.dirname(validPath), { recursive: true });
       await fs.writeFile(validPath, content, "utf-8");
       await audit({ tool: "write_file", action: "write", target: validPath, status: "ok", details: { bytes: Buffer.byteLength(content) } });
-      return toolResult("write_file", { path: validPath, bytes: Buffer.byteLength(content), checkpoint_id: checkpointId });
+      const data = await enrichAfterEdit(
+        { path: validPath, bytes: Buffer.byteLength(content), checkpoint_id: checkpointId },
+        [validPath]
+      );
+      return toolResult("write_file", data);
     }
   );
 
@@ -217,7 +222,8 @@ export function registerFilesystemTools(server: McpServer): void {
       const checkpointId = await checkpointBefore("edit_file", [validPath], { dry_run });
       if (!dry_run) await fs.writeFile(validPath, newContent, "utf-8");
       await audit({ tool: "edit_file", action: "edit", target: validPath, status: dry_run ? "dry-run" : "ok" });
-      return toolResult("edit_file", { path: validPath, diff, dry_run, checkpoint_id: checkpointId }, { summary: dry_run ? `dry-run ${validPath}` : `edited ${validPath}` });
+      const data = await enrichAfterEdit({ path: validPath, diff, dry_run, checkpoint_id: checkpointId }, [validPath], dry_run);
+      return toolResult("edit_file", data, { summary: dry_run ? `dry-run ${validPath}` : `edited ${validPath}` });
     }
   );
 
@@ -247,7 +253,12 @@ export function registerFilesystemTools(server: McpServer): void {
       const checkpointId = await checkpointBefore("multi_edit", [validPath], { dry_run });
       if (!dry_run) await fs.writeFile(validPath, next, "utf-8");
       await audit({ tool: "multi_edit", action: "edit", target: validPath, status: dry_run ? "dry-run" : "ok", details: { edits: edits.length } });
-      return toolResult("multi_edit", { path: validPath, diff, edits: edits.length, dry_run, checkpoint_id: checkpointId });
+      const data = await enrichAfterEdit(
+        { path: validPath, diff, edits: edits.length, dry_run, checkpoint_id: checkpointId },
+        [validPath],
+        dry_run
+      );
+      return toolResult("multi_edit", data);
     }
   );
 
@@ -280,7 +291,7 @@ export function registerFilesystemTools(server: McpServer): void {
     {
       title: "Apply Patch",
       description:
-        "Apply unified diff, Codex @@ hunks, or multi-file *** Begin Patch format. For single-file patches pass path. For multi-file patches path is optional base directory.",
+        "Preferred way to edit code. Codex @@ hunks or *** Begin Patch format. Read the file first. Use dry_run:true to preview.",
       inputSchema: {
         path: z.string().optional().describe("Target file (single-file) or base directory (multi-file)"),
         patch: z.string(),
@@ -310,11 +321,16 @@ export function registerFilesystemTools(server: McpServer): void {
           status: failed.length ? "error" : dry_run ? "dry-run" : "ok",
           details: { files: results.length, failed: failed.length },
         });
-        return toolResult(
-          "apply_patch",
+        const okPaths = results.filter((r) => r.ok && r.path).map((r) => r.path as string);
+        const payload = await enrichAfterEdit(
           { files: results, dry_run, multi_file: true, checkpoint_id: checkpointId },
-          { ok: failed.length === 0, summary: `patched ${results.length} file(s)${failed.length ? `, ${failed.length} failed` : ""}` }
+          okPaths,
+          dry_run
         );
+        return toolResult("apply_patch", payload, {
+          ok: failed.length === 0,
+          summary: `patched ${results.length} file(s)${failed.length ? `, ${failed.length} failed` : ""}`,
+        });
       }
 
       if (!filePath) throw new Error("path is required for single-file patches");
@@ -325,7 +341,8 @@ export function registerFilesystemTools(server: McpServer): void {
       const checkpointId = await checkpointBefore("apply_patch", [validPath], { dry_run });
       if (!dry_run) await fs.writeFile(validPath, next, "utf-8");
       await audit({ tool: "apply_patch", action: "patch", target: validPath, status: dry_run ? "dry-run" : "ok" });
-      return toolResult("apply_patch", { path: validPath, diff, dry_run, checkpoint_id: checkpointId });
+      const data = await enrichAfterEdit({ path: validPath, diff, dry_run, checkpoint_id: checkpointId }, [validPath], dry_run);
+      return toolResult("apply_patch", data);
     }
   );
 
@@ -358,7 +375,7 @@ export function registerFilesystemTools(server: McpServer): void {
     "glob",
     {
       title: "Glob",
-      description: "Find files by glob pattern (Claude Glob equivalent). Returns paths sorted by modification time.",
+      description: "Explore: find files by name pattern under a directory. Use before read_text_file when you do not know exact paths.",
       inputSchema: {
         pattern: z.string().describe('Glob pattern like "**/*.ts" or "src/**/*.tsx"'),
         path: z.string().optional().describe("Directory to search in; defaults to workspace root context"),
@@ -379,7 +396,7 @@ export function registerFilesystemTools(server: McpServer): void {
     "grep",
     {
       title: "Grep",
-      description: "Search file contents with regex (Claude Grep equivalent). Supports content/files_with_matches/count output modes.",
+      description: "Explore: search file contents by regex. Prefer over reading many files blindly. Modes: content, files_with_matches, count.",
       inputSchema: {
         pattern: z.string(),
         path: z.string().optional(),

@@ -20,9 +20,11 @@ import { initUpstreamManager } from "./lib/mcp-upstream-manager.js";
 import { startAdminServer } from "./admin/server.js";
 import { logMcpHttpEvent, logMcpRequest } from "./lib/activity-log.js";
 import {
-  formatProjectMemoryForInstructions,
-  loadProjectMemory,
-} from "./lib/project-memory.js";
+  buildInstructionContext,
+  summarizeInstructionContext,
+  type InstructionContext,
+} from "./lib/instruction-context.js";
+import { getChatGptToolProfile } from "./lib/tool-profile.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ADMIN_PORT = parseInt(process.env.ADMIN_PORT || "3001", 10);
@@ -56,24 +58,36 @@ setDefaultCwd(workspaceRoot);
 
 const upstreamManager = await initUpstreamManager();
 
-const projectMemoryBundle = await loadProjectMemory(workspaceRoot);
-const projectMemoryInstructions = formatProjectMemoryForInstructions(projectMemoryBundle);
-if (projectMemoryBundle.sections.length > 0) {
+const instructionContext: InstructionContext = await buildInstructionContext({
+  workspaceRoot,
+  workspaceRoots,
+  pid: process.pid,
+  adminPort: ADMIN_PORT,
+});
+
+if (instructionContext.projectMemory.sections.length > 0) {
   console.log(
-    `[MCP] Project memory: ${projectMemoryBundle.sections.length} file(s) from ${workspaceRoot} (${projectMemoryBundle.total_bytes} bytes)`
+    `[MCP] Project memory: ${instructionContext.projectMemory.sections.length} file(s) from ${workspaceRoot} (${instructionContext.projectMemory.total_bytes} bytes)`
   );
 } else {
   console.log(
     `[MCP] Project memory: no CLAUDE.md/AGENTS.md at ${workspaceRoot} — set WORKSPACE_PATH to your project root`
   );
 }
+if (instructionContext.git.is_repo) {
+  console.log(`[MCP] Git: branch ${instructionContext.git.branch}`);
+}
+console.log(
+  `[MCP] MCP instructions: ${Math.round(instructionContext.instructionBytes / 1024)}KB (agent prompt + env + git + memory)`
+);
+console.log(`[MCP] Tool profile: ${getChatGptToolProfile()} (CHATGPT_TOOL_PROFILE)`);
 
 const sessionManager = createSessionManager({
   workspaceRoot,
   shellTimeout: SHELL_TIMEOUT,
   workspaceRoots,
   port: PORT,
-  projectMemoryInstructions,
+  projectMemoryInstructions: instructionContext.instructionsText,
 });
 
 const app = express();
@@ -137,11 +151,7 @@ app.get("/health", (_req, res) => {
     activeSessions: sessionManager.count(),
     sessionRecovery: SESSION_RECOVERY,
     mcpEndpoints: MCP_PATHS,
-    projectMemory: {
-      root: projectMemoryBundle.root,
-      files: projectMemoryBundle.sections.map((s) => s.path),
-      bytes: projectMemoryBundle.total_bytes,
-    },
+    instructions: summarizeInstructionContext(instructionContext),
   });
 });
 
@@ -258,6 +268,8 @@ const adminServer = startAdminServer({
   pid: process.pid,
   manager: upstreamManager,
   sessionCount: () => sessionManager.count(),
+  instructionSummary: () => summarizeInstructionContext(instructionContext),
+  instructionsPreview: () => instructionContext.instructionsText,
 });
 
 const server = app.listen(PORT, () => {

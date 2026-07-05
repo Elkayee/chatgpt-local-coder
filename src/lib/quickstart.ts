@@ -1,7 +1,7 @@
 export const MCP_QUICKSTART = `
-## First session workflow
-1. Call agent_status (this tool) to confirm permissions and workspace roots.
-2. Call project_context to load AGENTS.md / README / CLAUDE.md for the target project.
+## Tool workflow (when agent_status is called)
+1. Project memory + git state are already in MCP instructions from WORKSPACE_PATH.
+2. Call project_context(path) only for a different repo than WORKSPACE_PATH.
 3. Explore with glob (file names) and grep (content), then read_text_file.
 4. Edit with apply_patch (preferred), multi_edit, or write_file for new files.
 5. Run builds/tests with run_command (short) or start_process + process_output (long).
@@ -42,24 +42,22 @@ export function buildServerInstructions(
   workspaceRoot: string,
   workspaceRoots: string[],
   _fullDiskAccess: boolean,
-  projectMemory?: string
+  contextBlock?: string
 ): string {
-  const head = [
-    "Local Codex coding MCP (Claude Code-style). Default project cwd is WORKSPACE_PATH.",
-    "Project memory below is auto-loaded from CLAUDE.md/AGENTS.md — treat it as ground truth.",
-    "If the user names a different project path, call project_context(path) then work under that path.",
-    "Explore: glob, grep, read_text_file. Edit: apply_patch, multi_edit, write_file.",
-    "Shell: run_command (persistent cwd). Rewind: rewind action=list|restore.",
-    `Default cwd: ${workspaceRoot}. Full machine access: ON (any absolute path).`,
-  ].join(" ");
-
-  const tail = [
-    `Workspace roots:\n${workspaceRoots.map((r) => `- ${r}`).join("\n")}`,
-    "Long commands: start_process + process_output. Paths: absolute or workspace-relative.",
-    "Call agent_status for tool cheat sheet; project_context for another repo.",
+  const header = [
+    "# Codex Local Coder MCP",
+    `Default project: ${workspaceRoot}`,
+    "Full machine access: ON. Tag this connector in ChatGPT before every task.",
   ].join("\n");
 
-  const memory = projectMemory?.trim();
-  if (!memory) return `${head}\n\n${tail}`;
-  return `${head}\n\n${memory}\n\n${tail}`;
+  const footer = [
+    "## Quick pointers",
+    `Workspace roots: ${workspaceRoots.join("; ")}`,
+    "agent_status — full tool cheat sheet + apply_patch format",
+    "project_context(path) — load CLAUDE.md from another repo",
+  ].join("\n");
+
+  const body = contextBlock?.trim();
+  if (!body) return `${header}\n\n${footer}`;
+  return `${header}\n\n${body}\n\n${footer}`;
 }

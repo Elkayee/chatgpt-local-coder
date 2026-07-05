@@ -10,15 +10,38 @@ export interface ShellExecResult {
   timed_out: boolean;
 }
 
+import { loadGlobalShellState, saveGlobalShellState } from "./global-shell-state.js";
+
 let sessionCwd: string | null = null;
 let sessionInitializedAt: string | null = null;
+let persistenceRoot: string | null = null;
 const history: string[] = [];
 const MAX_HISTORY = 50;
+
+export function setShellPersistenceRoot(workspaceRoot: string): void {
+  persistenceRoot = path.resolve(workspaceRoot);
+}
 
 export function initShellSession(defaultCwd: string): void {
   sessionCwd = path.resolve(defaultCwd);
   sessionInitializedAt = new Date().toISOString();
   history.length = 0;
+}
+
+/** Restore cwd from disk (ChatGPT = new MCP session per tool call). */
+export async function bootstrapShellSession(defaultCwd: string): Promise<void> {
+  setShellPersistenceRoot(defaultCwd);
+  const saved = await loadGlobalShellState(defaultCwd, defaultCwd);
+  if (saved?.cwd) {
+    sessionCwd = path.resolve(saved.cwd);
+    sessionInitializedAt = saved.updated_at;
+    if (saved.recent_commands?.length) {
+      history.length = 0;
+      history.push(...saved.recent_commands.slice(-MAX_HISTORY));
+    }
+    return;
+  }
+  initShellSession(defaultCwd);
 }
 
 export function getShellCwd(): string {
@@ -29,6 +52,9 @@ export function getShellCwd(): string {
 export function resetShellSession(cwd: string): void {
   sessionCwd = path.resolve(cwd);
   sessionInitializedAt = new Date().toISOString();
+  if (persistenceRoot) {
+    void saveGlobalShellState(persistenceRoot, sessionCwd, undefined, null);
+  }
 }
 
 export function getShellStatus() {
@@ -141,5 +167,11 @@ export async function execInShellSession(
 
   const result = await runOnce(effective, cwd, timeoutMs);
   sessionCwd = cwd;
+
+  if (persistenceRoot) {
+    const prev = await loadGlobalShellState(persistenceRoot, defaultCwd);
+    await saveGlobalShellState(persistenceRoot, cwd, effective, prev);
+  }
+
   return result;
 }

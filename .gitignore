@@ -6,6 +6,9 @@ dist/
 bin/
 profiles/*
 !profiles/mcp-upstream.json
+!profiles/post-edit-hooks.json
+!profiles/chatgpt-connector-description.txt
+.mcp-state/
 .env
 terminals/
 agent-tools/
