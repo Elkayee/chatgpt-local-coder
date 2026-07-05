@@ -18,7 +18,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node scripts/test-patch.mjs && node scripts/test-tools.mjs",
+    "test": "npm run build && node scripts/test-patch.mjs && node scripts/test-tools.mjs && node scripts/test-checkpoints.mjs && node scripts/test-mcp-upstream.mjs && node scripts/test-activity-log.mjs",
+    "test:integration": "npm run build && node scripts/test-mcp-bridge-integration.mjs",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "tunnel": "cloudflared tunnel --url http://localhost:3000"

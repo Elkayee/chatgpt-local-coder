@@ -15,8 +15,12 @@ import {
   extractRequestId,
   isInitializeRequest,
 } from "./lib/mcp-session-manager.js";
+import { initUpstreamManager } from "./lib/mcp-upstream-manager.js";
+import { startAdminServer } from "./admin/server.js";
+import { logMcpRequest } from "./lib/activity-log.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
+const ADMIN_PORT = parseInt(process.env.ADMIN_PORT || "3001", 10);
 const SHELL_TIMEOUT = parseInt(process.env.SHELL_TIMEOUT || "120", 10);
 const SESSION_RECOVERY =
   (process.env.MCP_SESSION_RECOVERY || "true").toLowerCase() !== "false";
@@ -45,6 +49,8 @@ const workspaceRoots = resolveWorkspaceRoots();
 const workspaceRoot = workspaceRoots[0] || process.cwd();
 setDefaultCwd(workspaceRoot);
 
+const upstreamManager = await initUpstreamManager();
+
 const sessionManager = createSessionManager({
   workspaceRoot,
   shellTimeout: SHELL_TIMEOUT,
@@ -57,11 +63,16 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use((req, res, next) => {
   const started = Date.now();
+  const isMcp = req.method === "POST" && (req.path === "/" || req.path === "/mcp");
   res.on("finish", () => {
     const duration = Date.now() - started;
-    const sessionId = req.headers["mcp-session-id"];
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const sessionInfo = sessionId ? ` session=${String(sessionId).slice(0, 8)}...` : "";
-    console.log(`[HTTP] ${req.method} ${req.path} ${res.statusCode} ${duration}ms${sessionInfo}`);
+    if (isMcp && req.body) {
+      logMcpRequest(req.body, sessionId, duration, res.statusCode);
+    } else if (!isMcp) {
+      console.log(`[HTTP] ${req.method} ${req.path} ${res.statusCode} ${duration}ms${sessionInfo}`);
+    }
   });
   next();
 });
@@ -189,6 +200,15 @@ for (const mcpPath of MCP_PATHS) {
 
 sessionManager.startCleanup();
 
+const adminServer = startAdminServer({
+  port: ADMIN_PORT,
+  host: "127.0.0.1",
+  mcpPort: PORT,
+  pid: process.pid,
+  manager: upstreamManager,
+  sessionCount: () => sessionManager.count(),
+});
+
 const server = app.listen(PORT, () => {
   console.log("");
   console.log("========================================");
@@ -198,6 +218,7 @@ const server = app.listen(PORT, () => {
   console.log(`  MCP:       http://localhost:${PORT}/`);
   console.log(`  MCP alt:   http://localhost:${PORT}/mcp`);
   console.log(`  Health:    http://localhost:${PORT}/health`);
+  console.log(`  Admin UI:  http://127.0.0.1:${ADMIN_PORT}/ui`);
   console.log(`  Default cwd: ${workspaceRoot}`);
   console.log(`  Full machine access: ON (no path restrictions)`);
   console.log(`  Session recovery: ${SESSION_RECOVERY ? "ON" : "OFF"}`);
@@ -223,6 +244,8 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 process.on("SIGINT", () => {
   console.log("\n[DUNG] Server dang tat...");
   sessionManager.stopCleanup();
+  void upstreamManager.shutdown();
+  adminServer.close();
   server.close(() => process.exit(0));
 });
 

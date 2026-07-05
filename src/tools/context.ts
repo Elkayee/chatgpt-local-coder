@@ -8,6 +8,8 @@ import { describePermissionProfile, getPermissionProfile } from "../lib/permissi
 import { getDefaultCwd, getFullDiskAccess, getMachineRoots } from "../lib/path-security.js";
 import { toolAnnotations } from "../lib/tool-annotations.js";
 import { MCP_QUICKSTART } from "../lib/quickstart.js";
+import { getCheckpointConfig } from "../lib/checkpoint.js";
+import { getUpstreamManager } from "../lib/mcp-upstream-manager.js";
 import { toolResult } from "../lib/tool-result.js";
 
 
@@ -106,6 +108,11 @@ export function registerContextTools(server: McpServer, workspaceRoot: string): 
       annotations: toolAnnotations("read"),
     },
     async () => {
+      const upstreamManager = getUpstreamManager();
+      let upstream: Awaited<ReturnType<typeof upstreamManager.listStatuses>> = [];
+      try {
+        upstream = await upstreamManager.listStatuses();
+      } catch {}
       return toolResult("agent_status", {
         permission_profile: getPermissionProfile(),
         permission_description: describePermissionProfile(),
@@ -116,6 +123,12 @@ export function registerContextTools(server: McpServer, workspaceRoot: string): 
         pid: process.pid,
         node: process.version,
         quickstart: MCP_QUICKSTART,
+        rewind: getCheckpointConfig(),
+        upstream_mcp: {
+          config_path: upstreamManager.getConfigPath(),
+          servers: upstream,
+        },
+        admin_ui: `http://127.0.0.1:${process.env.ADMIN_PORT || "3001"}/ui`,
       });
     }
   );

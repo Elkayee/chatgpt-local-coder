@@ -5,6 +5,7 @@ export const MCP_QUICKSTART = `
 3. Explore with glob (file names) and grep (content), then read_text_file.
 4. Edit with apply_patch (preferred), multi_edit, or write_file for new files.
 5. Run builds/tests with run_command (short) or start_process + process_output (long).
+6. Undo file edits with rewind (list → preview → restore). Shell/bash file changes are not tracked.
 
 ## Output format
 All tools return JSON: { ok, tool, summary, data }
@@ -15,6 +16,8 @@ All tools return JSON: { ok, tool, summary, data }
 - create_directory / delete_directory / copy_file / move_file / delete_file
 - run_command: persistent shell (cd persists); shell_status / shell_reset
 - git_status / git_diff / git_add / git_commit / git_branch / git_restore / git_stash
+- rewind: action=list|preview|restore|status — undo file edits via automatic checkpoints
+- mcp_servers / mcp_tools / mcp_call — delegate to upstream MCP servers on this machine
 - git_push / git_checkout / delete_directory: may be blocked by ChatGPT safety — use run_command fallback
 
 ## apply_patch — single file
@@ -39,7 +42,7 @@ export function buildServerInstructions(workspaceRoot: string, workspaceRoots: s
   const head = [
     "Local Codex coding MCP. FIRST call agent_status then project_context.",
     "Explore: glob, grep, read_text_file. Edit: apply_patch, multi_edit, write_file.",
-    "Shell: run_command (persistent cwd). Git: git_status/git_add/git_commit/git_restore; git_push via run_command if blocked.",
+    "Shell: run_command (persistent cwd). Rewind: rewind action=list|restore. Git: git_status/git_add/git_commit/git_restore; git_push via run_command if blocked.",
     `Default cwd: ${workspaceRoot}. Full machine access: ON (any absolute path).`,
   ].join(" ");
 

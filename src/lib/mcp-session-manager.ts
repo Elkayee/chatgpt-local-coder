@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpServer } from "../server-factory.js";
+import { getUpstreamManager } from "./mcp-upstream-manager.js";
 
 const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 const SESSION_TTL_MS = parseInt(process.env.MCP_SESSION_TTL_MS || "86400000", 10); // 24h
@@ -92,7 +93,9 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
   }
 
   function removeSession(sessionId: string, reason: string): void {
-    if (!sessions[sessionId]) return;
+    const session = sessions[sessionId];
+    if (!session) return;
+    getUpstreamManager().unregisterMcpServer(session.server);
     delete sessions[sessionId];
     console.log(`[MCP] Session removed (${reason}): ${sessionId}`);
   }
@@ -106,7 +109,8 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
       config.workspaceRoot,
       config.shellTimeout,
       config.workspaceRoots,
-      true
+      true,
+      getUpstreamManager()
     );
 
     const transport = new StreamableHTTPServerTransport({

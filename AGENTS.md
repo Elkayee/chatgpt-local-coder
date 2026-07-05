@@ -55,6 +55,9 @@ Bình thường khi:
 | `LS` | `list_directory` | Có `ignore` globs |
 | `Bash` | `run_command` | Lệnh ngắn, chờ xong |
 | Background shell | `start_process` + `process_output` | |
+| `Rewind` | `rewind` | `list` / `preview` / `restore` — undo file edits qua checkpoint tự động |
+| — | `mcp_servers`, `mcp_tools`, `mcp_call` | Gọi MCP server khác trên máy (hub) |
+| — | Admin UI `:3001/ui` | Import MCP từ Cursor / Claude Code / OpenCode |
 | — | `apply_patch` | Codex/OpenAI style (thêm so với Claude) |
 | — | `git_*`, `git_restore` | Git tools riêng (Claude dùng Bash) |
 | — | `project_context` | Đọc AGENTS.md / CLAUDE.md |
@@ -78,6 +81,7 @@ Bình thường khi:
 | Build/test dài | `start_process` → `process_output` |
 | Git | `git_status`, `git_diff`, `git_commit`, `git_restore` |
 | Restore file từ commit | `git_restore` (không dùng `git_checkout` cho file) |
+| Undo edits trong session | `rewind` action `list` → `preview` → `restore` (không track bash) |
 | Switch branch | `git_checkout` (chỉ branch) hoặc `git_branch` action `switch` |
 
 ## ChatGPT safety layer — tool bị chặn ngẫu nhiên

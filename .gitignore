@@ -1,9 +1,11 @@
 node_modules/
 dist/
 .mcp-audit.log
+.mcp-checkpoints/
 .tool-test-tmp/
 bin/
-profiles/
+profiles/*
+!profiles/mcp-upstream.json
 .env
 terminals/
 agent-tools/
