@@ -281,7 +281,8 @@ OPENAI_TUNNEL_API_KEY=
 | `WORKSPACE_PATH` | `cwd` | **Your project root** (like `cd` before `claude`). Auto-loads `CLAUDE.md` / `AGENTS.md` into MCP instructions |
 | `HOST` | `127.0.0.1` | Bind address. Keep as-is — `0.0.0.0` exposes the shell to your whole LAN |
 | `MCP_TOKEN` | *(empty)* | Secret in the endpoint path: `/mcp/<token>`. Empty = **no auth**. Generate: `node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"` |
-| `ADMIN_PORT` | `3001` | Admin UI (localhost-only). Change it if something else uses 3001 — Docker Desktop often does |
+| `ADMIN_PORT` | `3001` | [Admin UI](#-admin-ui) port (localhost-only, always on). Change it if something else uses 3001 — Docker Desktop often does |
+| `ADMIN_TOKEN` | *(empty)* | Bearer token for the Admin UI. Empty = loopback check only |
 | `CHATGPT_AUTO_APPROVE` | `true` | Tool annotations to reduce ChatGPT popups |
 | `MCP_SESSION_RECOVERY` | `true` | Auto-recover stale sessions after restart |
 | `SHELL_TIMEOUT` | `120` | Max seconds for `run_command` |
@@ -290,6 +291,30 @@ OPENAI_TUNNEL_API_KEY=
 > Variables already set in your shell **win over `.env`** (`dotenv` does not override). If a change to `.env` seems ignored, check `env | grep WORKSPACE_PATH` first.
 
 > **Full machine access** is enabled by default. `WORKSPACE_PATH` only sets the default cwd — absolute paths like `D:\Projects\…` work everywhere.
+
+## 🖥️ Admin UI
+
+A local web console ships with the server. It starts **automatically** with `npm start` (same process, separate port) — there is no separate command and no on/off switch.
+
+```
+http://127.0.0.1:3001/ui          # or your ADMIN_PORT
+```
+
+The exact URL is printed in the startup banner. Stopping the server stops the admin UI too (`Ctrl+C`, `.\stop.ps1`, or `pkill -f "dist/index.js"`).
+
+| Tab | What it does |
+|-----|--------------|
+| **Tổng quan** | PID, active ChatGPT sessions, default cwd, upstream health |
+| **MCP Servers** | Enable/disable upstream MCP servers, test connections, inspect their tools |
+| **Import** | Pull existing MCP config from Cursor / Claude Code / OpenCode |
+| **Nhật ký** | Live tool-call log from ChatGPT (SSE stream) |
+| **Project** | Preview the exact MCP instructions injected into ChatGPT each session |
+| **Cài đặt** | Read **and write** `.env` |
+| **Raw status** | Raw JSON status dump |
+
+This is the **hub** side of the project: upstream MCP servers are proxied through this one connector, so ChatGPT reaches their tools without being wired up separately. Configure them in `MCP_UPSTREAM_CONFIG` (default `profiles/mcp-upstream.json`).
+
+> ⚠️ **Never expose this port through a tunnel** — only tunnel port 3000. The admin API writes `.env`, so reaching it means being able to change `WORKSPACE_PATH` or switch `MCP_TOKEN` off. It is protected by a loopback-only guard plus the optional `ADMIN_TOKEN`; since it cannot be disabled, setting `ADMIN_TOKEN` is worthwhile.
 
 ## 🏗️ Architecture
 
@@ -329,6 +354,7 @@ This server grants **full access to your machine** — files, shell, git. Only e
 - `MCP_TOKEN` guards the endpoint at `/mcp/<token>`; `/mcp` and `/` return 404. **Set it** — without it, anyone who learns your tunnel URL gets a shell
 - The connector URL contains the token — treat it as a credential, and stop the tunnel when you are done
 - `WORKSPACE_PATH` only sets the *default* cwd; it does **not** restrict access (`FULL_DISK_ACCESS` is on)
+- The [Admin UI](#-admin-ui) is always running and can write `.env` — tunnel **only** port 3000, never `ADMIN_PORT`, and set `ADMIN_TOKEN`
 - `.env` and secrets are gitignored
 - Audit log: `.mcp-audit.log` (optional, configurable)
 - Use on a trusted network / personal machine only
@@ -410,6 +436,8 @@ Dùng Pinggy nếu mạng chặn cloudflared (cổng 7844). Nếu cloudflared ch
 **Bắt buộc tag connector mỗi chat:** Chat mới → **+** → **More** → bật connector, hoặc gõ **`@`** + tên connector trong ô chat. Nếu không tag, ChatGPT báo *"Đang tìm các công cụ có sẵn"* rồi *"Lỗi trong luồng tin nhắn"* — **server không có log lỗi** vì MCP chưa được gọi.
 
 **WORKSPACE_PATH:** đặt đúng thư mục project (không phải thư mục `chatgpt-local-coder`). Server tự đọc `CLAUDE.md` / `AGENTS.md` giống Claude Code.
+
+**Admin UI:** tự bật cùng `npm start` tại `http://127.0.0.1:<ADMIN_PORT>/ui` (mặc định 3001), không tắt riêng được. Dùng để quản lý MCP server khác, xem log tool call, sửa `.env`. **Đừng tunnel cổng này ra ngoài** — chỉ tunnel :3000.
 
 **Lưu ý:** Không bấm **"Luôn cho phép"** trên popup — cấu hình quyền ở Settings → Apps. Sau khi restart server: Refresh connector + mở chat mới + tag lại connector.
 
