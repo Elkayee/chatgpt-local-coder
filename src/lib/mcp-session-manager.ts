@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import {
+  isInitializeRequest,
+  LATEST_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpServer } from "../server-factory.js";
 import { getUpstreamManager } from "./mcp-upstream-manager.js";
@@ -20,6 +24,47 @@ const SESSION_DELETE_GRACE_MS = parseInt(
 
 const lastTransportErrors: Record<string, string> = {};
 const sessionOpChains = new Map<string, Promise<void>>();
+
+/**
+ * Gan Mcp-Session-Id vao request truoc khi day cho transport.
+ *
+ * SDK >=1.29 boc Node transport quanh WebStandardStreamableHTTPServerTransport
+ * va dung @hono/node-server de doi IncomingMessage -> fetch Request. Hono dung
+ * `incoming.rawHeaders`, KHONG dung `incoming.headers` — nen chi va req.headers
+ * la vo tac dung. Phai va ca hai.
+ */
+function withSessionIdHeader(
+  req: Request,
+  sessionId: string,
+  protocolVersion: string
+): Request {
+  const headers = {
+    ...req.headers,
+    "mcp-session-id": sessionId,
+    "mcp-protocol-version": protocolVersion,
+  };
+  const drop = new Set(["mcp-session-id", "mcp-protocol-version"]);
+  const raw: string[] = [];
+  const existing = req.rawHeaders || [];
+  for (let i = 0; i < existing.length; i += 2) {
+    if (drop.has(existing[i]?.toLowerCase())) continue;
+    raw.push(existing[i], existing[i + 1]);
+  }
+  raw.push("mcp-session-id", sessionId, "mcp-protocol-version", protocolVersion);
+  return Object.assign(req, { headers, rawHeaders: raw });
+}
+
+/**
+ * ChatGPT (openai-mcp) gui MCP-Protocol-Version moi hon SDK ho tro (vd 2026-07-28)
+ * trong request discovery. SDK se tra 400 cho moi request mang version la, lam
+ * connector retry vo han. Kep ve version SDK that su ho tro.
+ */
+function negotiateProtocolVersion(requested: string | undefined): string {
+  if (requested && (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(requested)) {
+    return requested;
+  }
+  return LATEST_PROTOCOL_VERSION;
+}
 
 export interface McpSession {
   transport: StreamableHTTPServerTransport;
@@ -329,7 +374,10 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
       const run = async () => {
         await session.transport.handleRequest(req, res, body);
       };
-      if (sid) {
+      // GET mo SSE stream song lau: handleRequest chi resolve khi stream dong.
+      // Neu day vao hang doi tuan tu, no giu khoa vinh vien va MOI POST sau do
+      // (tools/list, tools/call) se treo — deadlock. Chi tuan tu hoa POST/DELETE.
+      if (sid && req.method !== "GET") {
         await enqueueSessionOp(sid, run);
       } else {
         await run();
@@ -348,9 +396,9 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
 
       console.log(`[MCP] Attempting session recovery for stale ID: ${staleSessionId}`);
 
-      const protocolVersion =
-        (req.headers["mcp-protocol-version"] as string | undefined) ??
-        DEFAULT_PROTOCOL_VERSION;
+      const protocolVersion = negotiateProtocolVersion(
+        req.headers["mcp-protocol-version"] as string | undefined
+      );
       const mcpPath = req.path || "/mcp";
 
       const pending = await buildSession(staleSessionId);
@@ -372,8 +420,7 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
       touch(staleSessionId);
       console.log(`[MCP] Session recovered: ${staleSessionId}`);
 
-      const headers = { ...req.headers, "mcp-session-id": staleSessionId };
-      const patchedReq = Object.assign(req, { headers });
+      const patchedReq = withSessionIdHeader(req, staleSessionId, protocolVersion);
       await enqueueSessionOp(staleSessionId, async () => {
         await recovered.transport.handleRequest(patchedReq, res, body);
       });
