@@ -4,6 +4,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "path";
+import { randomUUID } from "crypto";
 
 import {
   setDefaultCwd,
@@ -27,6 +28,8 @@ import {
 import { getChatGptToolProfile } from "./lib/tool-profile.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
+const HOST = process.env.HOST || "127.0.0.1";
+const MCP_TOKEN = (process.env.MCP_TOKEN || "").trim();
 const ADMIN_PORT = parseInt(process.env.ADMIN_PORT || "3001", 10);
 const SHELL_TIMEOUT = parseInt(process.env.SHELL_TIMEOUT || "120", 10);
 const SESSION_RECOVERY =
@@ -93,7 +96,11 @@ const sessionManager = createSessionManager({
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
-const MCP_PATHS_SET = new Set(["/", "/mcp"]);
+// ChatGPT co the goi "/" hoac "/mcp" — ho tro ca hai.
+// Neu dat MCP_TOKEN, endpoint doi thanh "/<token>" + "/mcp/<token>" va cac path
+// khong co token se tra 401 (chong scan tunnel URL / trang web goi vao localhost).
+const MCP_PATHS = MCP_TOKEN ? [`/${MCP_TOKEN}`, `/mcp/${MCP_TOKEN}`] : ["/", "/mcp"];
+const MCP_PATHS_SET = new Set(MCP_PATHS);
 
 app.use((req, res, next) => {
   const started = Date.now();
@@ -137,8 +144,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// ChatGPT co the goi "/" hoac "/mcp" — ho tro ca hai
-const MCP_PATHS = ["/", "/mcp"];
+if (MCP_TOKEN) {
+  // 404 chu KHONG phai 401: theo chuan MCP, 401 la tin hieu "can OAuth" — client
+  // (ChatGPT) se di tim OAuth metadata, khong thay, roi treo. 404 = khong co gi o day.
+  for (const unguarded of ["/", "/mcp"]) {
+    app.all(unguarded, (_req, res) => {
+      res.status(404).json({ ok: false, error: "Not found" });
+    });
+  }
+}
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -186,6 +200,19 @@ async function handleMcpPost(req: express.Request, res: express.Response): Promi
       }
       sessionManager.sendSessionNotFound(res, requestId);
       return;
+    }
+
+    // ChatGPT gui mot so request (vd "server/discover") KHONG kem Mcp-Session-Id.
+    // Tra 400 o day khien connector retry vo han ("loading mai"). Thay vao do tao
+    // session moi + warm-up roi phuc vu request, de SDK tra loi JSON-RPC hop le.
+    if (SESSION_RECOVERY) {
+      const adopted = await sessionManager.tryRecoverStale(
+        randomUUID(),
+        req,
+        res,
+        req.body
+      );
+      if (adopted) return;
     }
 
     sessionManager.sendBadRequest(
@@ -272,19 +299,20 @@ const adminServer = startAdminServer({
   instructionsPreview: () => instructionContext.instructionsText,
 });
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log("");
   console.log("========================================");
   console.log("  Codex MCP Server");
   console.log("========================================");
-  console.log(`  Local:     http://localhost:${PORT}`);
-  console.log(`  MCP:       http://localhost:${PORT}/`);
-  console.log(`  MCP alt:   http://localhost:${PORT}/mcp`);
-  console.log(`  Health:    http://localhost:${PORT}/health`);
+  console.log(`  Local:     http://${HOST}:${PORT}`);
+  console.log(`  MCP:       http://${HOST}:${PORT}${MCP_PATHS[0]}`);
+  console.log(`  MCP alt:   http://${HOST}:${PORT}${MCP_PATHS[1]}`);
+  console.log(`  Health:    http://${HOST}:${PORT}/health`);
   console.log(`  Admin UI:  http://127.0.0.1:${ADMIN_PORT}/ui`);
   console.log(`  Default cwd: ${workspaceRoot}`);
   console.log(`  Full machine access: ON (no path restrictions)`);
   console.log(`  Session recovery: ${SESSION_RECOVERY ? "ON" : "OFF"}`);
+  console.log(`  Auth:      ${MCP_TOKEN ? "ON (MCP_TOKEN in URL path)" : "OFF — dat MCP_TOKEN trong .env!"}`);
   console.log(`  PID:       ${process.pid}`);
   console.log("========================================");
   console.log("  Dang chay... (Ctrl+C de dung)");
