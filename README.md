@@ -129,6 +129,43 @@ Example prompts (after tagging):
 > **Tip:** After server updates or restarts → **Refresh** the connector and start a **new chat** (re-tag the connector).  
 > **Avoid** clicking **"Always allow"** on permission popups — it can reset the MCP session. Configure permissions in **Settings → Apps** instead.
 
+## 🧡 Connect Claude Web (`claude.ai`)
+
+This server includes an **OAuth 2.1 shim** (`/.well-known/*`, `/oauth/*`) that allows **Claude Web** custom connectors to seamlessly connect over Streamable HTTP without needing manual credentials.
+
+### 1. Run server & Cloudflare Tunnel
+
+Claude Web requires a public HTTPS tunnel. Use **Option B (Cloudflare Tunnel)**:
+
+```powershell
+# Terminal 1: Start server
+.\start.ps1
+
+# Terminal 2: Expose public HTTPS tunnel
+.\tunnel.ps1
+```
+
+Copy the public URL returned by `cloudflared` (e.g. `https://xxxx.trycloudflare.com`).
+
+### 2. Add custom connector on `claude.ai`
+
+1. Open [Claude Web](https://claude.ai) → Click **`+`** (Connectors) in chat input or **Settings** → **Connectors**.
+2. Click **Add custom connector**.
+3. Fill in:
+   - **Name:** `Local Coder`
+   - **Remote MCP server URL:** `https://xxxx.trycloudflare.com/mcp` *(remember to append `/mcp`)*
+   - **OAuth Client ID (optional):** Leave blank
+   - **OAuth Client Secret (optional):** Leave blank
+4. Click **Add**. Claude Web will negotiate capability & OAuth handshake via the built-in shim and redirect back automatically.
+
+### 3. Use in Chat
+
+1. In a chat prompt on `claude.ai`, click **`+`** (Connectors) → Enable **Local Coder**.
+2. Start giving commands like *"Read package.json and explain the structure"* or *"Run npm test"*.
+
+> **Note:** Do NOT use Option A (OpenAI Secure Tunnel) for Claude Web, as OpenAI's `tunnel_...` URLs are proprietary to ChatGPT. Use Option B (Cloudflare Tunnel).
+
+
 ## 🌐 Tunnel options
 
 ### Option A — OpenAI Secure MCP Tunnel *(recommended)*
@@ -420,7 +457,7 @@ cd chatgpt-local-coder
 cp .env.example .env
 npm install && npm run build
 
-# Tạo token rồi dán vào MCP_TOKEN trong .env
+# Tạo token rồi dán vào MCP_TOKEN trong .env (tùy chọn)
 node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
 
 npm start                                    # terminal 1
@@ -429,11 +466,13 @@ ssh -p 443 -R0:localhost:3000 a.pinggy.io    # terminal 2
 
 Dùng Pinggy nếu mạng chặn cloudflared (cổng 7844). Nếu cloudflared chạy được thì `npm run tunnel` cũng ổn.
 
-**ChatGPT:** Settings → Connectors → tạo connector → Refresh → chat mới.
+**ChatGPT, Claude Web & Gemini Spark:** Hỗ trợ kết nối song song ChatGPT Developer Mode, Claude Web (`claude.ai`), và Gemini Spark.
 
-**URL connector phải có token:** `https://<tunnel>/mcp/<MCP_TOKEN>`. Vào `/mcp` trơn sẽ trả **404**. Coi URL này như mật khẩu — ai có nó là có shell trên máy bạn.
+**Kết nối Claude Web & Gemini Spark:**
+1. Chạy server `.\start.ps1` (hoặc `npm start`) và Cloudflare tunnel `.\tunnel.ps1`.
+2. Trên `claude.ai` hoặc `gemini.google.com`: Thêm connector mới với URL `https://<tunnel-domain>.trycloudflare.com/mcp`.
+3. Client ID & Secret để trống. Server đã tích hợp sẵn OAuth 2.1 shim tự động xử lý xác thực.
 
-**Bắt buộc tag connector mỗi chat:** Chat mới → **+** → **More** → bật connector, hoặc gõ **`@`** + tên connector trong ô chat. Nếu không tag, ChatGPT báo *"Đang tìm các công cụ có sẵn"* rồi *"Lỗi trong luồng tin nhắn"* — **server không có log lỗi** vì MCP chưa được gọi.
 
 **WORKSPACE_PATH:** đặt đúng thư mục project (không phải thư mục `chatgpt-local-coder`). Server tự đọc `CLAUDE.md` / `AGENTS.md` giống Claude Code.
 

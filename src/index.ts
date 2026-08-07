@@ -26,6 +26,7 @@ import {
   type InstructionContext,
 } from "./lib/instruction-context.js";
 import { getChatGptToolProfile } from "./lib/tool-profile.js";
+import { createOAuthShimRouter } from "./lib/oauth-shim.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -95,7 +96,41 @@ const sessionManager = createSessionManager({
 
 const app = express();
 app.use(cors());
+
+// Log every incoming request details for debugging Gemini connection
+app.use((req, _res, next) => {
+  console.log(`[INCOMING] ${req.method} ${req.originalUrl} | Content-Type: ${req.headers["content-type"]} | Accept: ${req.headers["accept"]} | Auth: ${req.headers["authorization"] ? "Bearer ***" : "none"}`);
+  next();
+});
+
+// Normalize Accept header for MCP Streamable HTTP SDK compatibility
+// (SDK requires both application/json and text/event-stream in Accept header)
+app.use((req, _res, next) => {
+  const targetAccept = "application/json, text/event-stream, */*";
+  req.headers["accept"] = targetAccept;
+
+  if (Array.isArray(req.rawHeaders)) {
+    let found = false;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      if (req.rawHeaders[i].toLowerCase() === "accept") {
+        req.rawHeaders[i + 1] = targetAccept;
+        found = true;
+      }
+    }
+    if (!found) {
+      req.rawHeaders.push("Accept", targetAccept);
+    }
+  }
+  next();
+});
+
 app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+// OAuth 2.1 shim — Claude Web & Gemini Spark connector handshake
+// (/.well-known/*, /oauth/* — does not affect ChatGPT MCP traffic)
+app.use(createOAuthShimRouter());
+
 // ChatGPT co the goi "/" hoac "/mcp" — ho tro ca hai.
 // Neu dat MCP_TOKEN, endpoint doi thanh "/<token>" + "/mcp/<token>" va cac path
 // khong co token se tra 401 (chong scan tunnel URL / trang web goi vao localhost).
@@ -171,8 +206,13 @@ app.get("/health", (_req, res) => {
 
 async function handleMcpPost(req: express.Request, res: express.Response): Promise<void> {
   try {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const querySessionId =
+      (req.query.sessionId as string) ||
+      (req.query["mcp-session-id"] as string) ||
+      (req.query.session_id as string);
+    const sessionId = (req.headers["mcp-session-id"] as string | undefined) || querySessionId;
     const requestId = extractRequestId(req.body);
+    console.log(`[MCP POST BODY] session=${sessionId || "none"}`, JSON.stringify(req.body));
 
     const existing = sessionId ? sessionManager.get(sessionId) : undefined;
     if (existing) {
@@ -245,13 +285,39 @@ function handleStaleSession(
 }
 
 async function handleMcpGet(req: express.Request, res: express.Response): Promise<void> {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  if (handleStaleSession(req, res, sessionId)) return;
+  const querySessionId =
+    (req.query.sessionId as string) ||
+    (req.query["mcp-session-id"] as string) ||
+    (req.query.session_id as string);
+  const headerSessionId = req.headers["mcp-session-id"] as string | undefined;
+
+  let sessionId = headerSessionId || querySessionId;
 
   if (!sessionId) {
-    sessionManager.sendBadRequest(res, "Bad Request: Mcp-Session-Id header is required");
+    const accept = (req.headers["accept"] as string | undefined) || "";
+    if (accept.includes("text/event-stream")) {
+      const recent = sessionManager.getMostRecent();
+      if (recent && recent.transport.sessionId && Date.now() - recent.lastAccessedAt < 60_000) {
+        const sid = recent.transport.sessionId;
+        console.log(`[MCP] Attaching GET SSE stream to recent session: ${sid}`);
+        req.headers["mcp-session-id"] = sid;
+        if (Array.isArray(req.rawHeaders)) {
+          req.rawHeaders.push("Mcp-Session-Id", sid);
+        }
+        await sessionManager.handleExisting(recent, req, res, undefined);
+        return;
+      }
+
+      console.log("[MCP] Initializing new session transport for GET SSE stream");
+      await sessionManager.createNew(req, res, undefined);
+      return;
+    }
+
+    res.status(200).json({ status: "ok", message: "Codex MCP Endpoint" });
     return;
   }
+
+  if (handleStaleSession(req, res, sessionId)) return;
 
   const session = sessionManager.get(sessionId);
   if (!session) {
@@ -263,7 +329,12 @@ async function handleMcpGet(req: express.Request, res: express.Response): Promis
 }
 
 async function handleMcpDelete(req: express.Request, res: express.Response): Promise<void> {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const querySessionId =
+    (req.query.sessionId as string) ||
+    (req.query["mcp-session-id"] as string) ||
+    (req.query.session_id as string);
+  const sessionId = (req.headers["mcp-session-id"] as string | undefined) || querySessionId;
+
   if (handleStaleSession(req, res, sessionId)) return;
 
   if (!sessionId) {
@@ -281,6 +352,9 @@ async function handleMcpDelete(req: express.Request, res: express.Response): Pro
 }
 
 for (const mcpPath of MCP_PATHS) {
+  app.head(mcpPath, (_req, res) => {
+    res.status(200).end();
+  });
   app.post(mcpPath, handleMcpPost);
   app.get(mcpPath, handleMcpGet);
   app.delete(mcpPath, handleMcpDelete);
@@ -313,6 +387,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`  Full machine access: ON (no path restrictions)`);
   console.log(`  Session recovery: ${SESSION_RECOVERY ? "ON" : "OFF"}`);
   console.log(`  Auth:      ${MCP_TOKEN ? "ON (MCP_TOKEN in URL path)" : "OFF — dat MCP_TOKEN trong .env!"}`);
+  console.log(`  OAuth shim:  ON (Claude Web & Gemini Spark compatible)`);
   console.log(`  PID:       ${process.pid}`);
   console.log("========================================");
   console.log("  Dang chay... (Ctrl+C de dung)");

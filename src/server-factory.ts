@@ -49,12 +49,6 @@ export function createMcpServer(
         logging: {},
         tools: { listChanged: true },
       },
-      instructions: buildServerInstructions(
-        workspaceRoot,
-        workspaceRoots,
-        fullDiskAccess,
-        projectMemoryInstructions
-      ),
     }
   );
 

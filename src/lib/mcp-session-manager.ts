@@ -83,6 +83,7 @@ export interface SessionManagerConfig {
 
 export interface SessionManager {
   get(sessionId: string): McpSession | undefined;
+  getMostRecent(): McpSession | undefined;
   touch(sessionId: string): void;
   count(): number;
   createNew(req: Request, res: Response, body: unknown): Promise<void>;
@@ -308,6 +309,16 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
   return {
     get(sessionId: string) {
       return sessions[sessionId];
+    },
+
+    getMostRecent() {
+      let latest: McpSession | undefined;
+      for (const s of Object.values(sessions)) {
+        if (!latest || s.lastAccessedAt > latest.lastAccessedAt) {
+          latest = s;
+        }
+      }
+      return latest;
     },
 
     touch,
