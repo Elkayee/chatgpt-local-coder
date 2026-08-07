@@ -294,26 +294,19 @@ async function handleMcpGet(req: express.Request, res: express.Response): Promis
   let sessionId = headerSessionId || querySessionId;
 
   if (!sessionId) {
-    const accept = (req.headers["accept"] as string | undefined) || "";
-    if (accept.includes("text/event-stream")) {
-      const recent = sessionManager.getMostRecent();
-      if (recent && recent.transport.sessionId && Date.now() - recent.lastAccessedAt < 60_000) {
-        const sid = recent.transport.sessionId;
-        console.log(`[MCP] Attaching GET SSE stream to recent session: ${sid}`);
-        req.headers["mcp-session-id"] = sid;
-        if (Array.isArray(req.rawHeaders)) {
-          req.rawHeaders.push("Mcp-Session-Id", sid);
-        }
-        await sessionManager.handleExisting(recent, req, res, undefined);
-        return;
+    const recent = sessionManager.getMostRecent();
+    if (recent && recent.transport.sessionId && Date.now() - recent.lastAccessedAt < 60_000) {
+      const sid = recent.transport.sessionId;
+      console.log(`[MCP] Attaching GET SSE stream to recent session: ${sid}`);
+      req.headers["mcp-session-id"] = sid;
+      if (Array.isArray(req.rawHeaders)) {
+        req.rawHeaders.push("Mcp-Session-Id", sid);
       }
-
-      console.log("[MCP] Initializing new session transport for GET SSE stream");
-      await sessionManager.createNew(req, res, undefined);
+      await sessionManager.handleExisting(recent, req, res, undefined);
       return;
     }
 
-    res.status(200).json({ status: "ok", message: "Codex MCP Endpoint" });
+    res.status(200).json({ status: "ok", name: "codex-mcp-server", message: "Codex MCP Endpoint is running" });
     return;
   }
 

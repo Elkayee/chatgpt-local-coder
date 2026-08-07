@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import fs from "fs";
 import path from "path";
 
 export interface ShellExecResult {
@@ -111,9 +112,10 @@ export function applyCwdDirectives(currentCwd: string, command: string): { cwd: 
 
 function runOnce(command: string, cwd: string, timeoutMs: number): Promise<ShellExecResult> {
   return new Promise((resolve, reject) => {
-    const shell = process.platform === "win32" ? "powershell.exe" : "bash";
+    const validCwd = fs.existsSync(cwd) ? cwd : process.cwd();
+    const shell = process.platform === "win32" ? "powershell.exe" : (process.env.SHELL || "bash");
     const args = process.platform === "win32" ? ["-NoProfile", "-Command", command] : ["-lc", command];
-    const child = spawn(shell, args, { cwd, windowsHide: true, env: process.env });
+    const child = spawn(shell, args, { cwd: validCwd, windowsHide: true, env: process.env });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
