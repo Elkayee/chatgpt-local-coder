@@ -4,7 +4,7 @@
     {
       "id": "unity-mcp",
       "name": "unity-mcp",
-      "enabled": false,
+      "enabled": true,
       "transport": "http",
       "args": [],
       "env": {},
@@ -17,7 +17,7 @@
     {
       "id": "ida-pro-mcp",
       "name": "ida-pro-mcp",
-      "enabled": false,
+      "enabled": true,
       "transport": "http",
       "args": [],
       "env": {},
@@ -30,7 +30,7 @@
     {
       "id": "ghidra-mcp",
       "name": "ghidra-mcp",
-      "enabled": false,
+      "enabled": true,
       "transport": "stdio",
       "command": "python",
       "args": [
@@ -51,7 +51,7 @@
     {
       "id": "hexstrike-ai",
       "name": "hexstrike-ai",
-      "enabled": false,
+      "enabled": true,
       "transport": "stdio",
       "command": "D:\\Coding\\MCP\\hexstrike-ai\\hexstrike_env\\Scripts\\python.exe",
       "args": [
@@ -70,7 +70,7 @@
     {
       "id": "open-design",
       "name": "open-design",
-      "enabled": false,
+      "enabled": true,
       "transport": "stdio",
       "command": "node",
       "args": [
@@ -88,7 +88,7 @@
     {
       "id": "colab-mcp",
       "name": "colab-mcp",
-      "enabled": false,
+      "enabled": true,
       "transport": "stdio",
       "command": "uvx",
       "args": [
@@ -107,7 +107,7 @@
     {
       "id": "UnityMCP",
       "name": "UnityMCP",
-      "enabled": false,
+      "enabled": true,
       "transport": "http",
       "args": [],
       "env": {},
@@ -115,6 +115,92 @@
       "tool_prefix": "UnityMCP",
       "expose": "meta_only",
       "tools": [],
+      "idle_timeout_sec": 600
+    },
+    {
+      "id": "codebase-retrieval",
+      "name": "codebase-retrieval",
+      "enabled": true,
+      "transport": "http",
+      "args": [],
+      "env": {},
+      "url": "http://127.0.0.1:43309/mcp-repo/home_tung_slotmaster_dev_src_main",
+      "tool_prefix": "codebase_retrieval",
+      "expose": "allowlist",
+      "tools": [
+        "codebase-retrieval"
+      ],
+      "idle_timeout_sec": 600
+    },
+    {
+      "id": "codebase-memory-mcp",
+      "name": "codebase-memory-mcp",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "/home/tung/.local/bin/codebase-memory-mcp",
+      "args": [],
+      "env": {},
+      "tool_prefix": "codebase-memory-mcp",
+      "expose": "allowlist",
+      "tools": [
+        "trace_path",
+        "get_architecture"
+      ],
+      "idle_timeout_sec": 600
+    },
+    {
+      "id": "headroom",
+      "name": "headroom",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "/home/tung/.local/bin/headroom",
+      "args": [
+        "mcp",
+        "serve"
+      ],
+      "env": {},
+      "tool_prefix": "headroom",
+      "expose": "meta_only",
+      "tools": [],
+      "idle_timeout_sec": 600
+    },
+    {
+      "id": "tokensave",
+      "name": "tokensave",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "/home/tung/.local/bin/tokensave",
+      "args": [
+        "serve"
+      ],
+      "env": {},
+      "cwd": "/home/tung/chatgpt-local-coder",
+      "tool_prefix": "tokensave",
+      "expose": "allowlist",
+      "tools": [
+        "tokensave_affected",
+        "tokensave_record_decision",
+        "tokensave_record_code_area",
+        "tokensave_session_recall"
+      ],
+      "idle_timeout_sec": 600
+    },
+    {
+      "id": "gitnexus",
+      "name": "gitnexus",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "/home/tung/.nvm/versions/node/v24.14.0/bin/gitnexus",
+      "args": [
+        "mcp"
+      ],
+      "env": {},
+      "tool_prefix": "gitnexus",
+      "expose": "allowlist",
+      "tools": [
+        "impact",
+        "detect_changes"
+      ],
       "idle_timeout_sec": 600
     }
   ]

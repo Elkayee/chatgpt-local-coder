@@ -179,3 +179,7 @@ Health check: `http://127.0.0.1:3000/health` | Admin UI: `http://127.0.0.1:<ADMI
 | Connection failed | Server + tunnel đều phải chạy; URL phải HTTPS và có `/mcp/<MCP_TOKEN>` |
 | Tool not found | Tool đó chỉ có ở profile `full` — xem mục *Tool profile*. Gọi `agent_status` để kiểm tra |
 | Connector loading mãi khi bấm Create | Build cũ bị deadlock SSE stream. Chạy `npm run build` rồi khởi động lại server |
+
+## Codebase exploration
+
+When asked about the codebase, project structure, or to find code, always use the context-engine MCP tool (codebase-retrieval) in the root workspace first before reading individual files. Use `codebase-retrieval` instead of the Explore subagent for codebase exploration and search tasks.
