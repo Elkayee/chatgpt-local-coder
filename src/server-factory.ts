@@ -31,14 +31,14 @@ function applyToolProfile(server: McpServer): void {
   }) as typeof server.registerTool;
 }
 
-export function createMcpServer(
+export async function createMcpServer(
   workspaceRoot: string,
   shellTimeout: number,
   workspaceRoots: string[] = [workspaceRoot],
   fullDiskAccess = false,
   upstreamManager?: McpUpstreamManager,
   projectMemoryInstructions?: string
-): McpServer {
+): Promise<McpServer> {
   const server = new McpServer(
     {
       name: "codex-mcp-server",
@@ -63,7 +63,7 @@ export function createMcpServer(
   if (upstreamManager) {
     registerMcpBridgeTools(server, upstreamManager);
     upstreamManager.registerMcpServer(server);
-    void refreshProxiedTools(server, upstreamManager);
+    await refreshProxiedTools(server, upstreamManager);
   }
 
   return server;

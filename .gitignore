@@ -1,19 +1,47 @@
+# Dependencies
 node_modules/
+
+# Build & Output
 dist/
+bin/
+
+# Project / Agent state & logs
 .mcp-audit.log
 .mcp-checkpoints/
-.tool-test-tmp/
-bin/
-profiles/*
-!profiles/mcp-upstream.json
-!profiles/post-edit-hooks.json
-!profiles/chatgpt-connector-description.txt
 .mcp-state/
-.env
+.tool-test-tmp/
 terminals/
 agent-tools/
 mcps/
 log_console.txt
 *.log
+
+# Configuration & Environment
+.env
+
+# Profiles exceptions
+profiles/*
+!profiles/mcp-upstream.json
+!profiles/post-edit-hooks.json
+!profiles/chatgpt-connector-description.txt
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System files
 .DS_Store
 Thumbs.db
+*.tmp
+
+# Python & Caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Backup & Temp files
+*.bak
+*.bak.*

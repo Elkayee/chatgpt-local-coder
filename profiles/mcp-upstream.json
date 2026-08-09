@@ -4,7 +4,7 @@
     {
       "id": "unity-mcp",
       "name": "unity-mcp",
-      "enabled": true,
+      "enabled": false,
       "transport": "http",
       "args": [],
       "env": {},
@@ -17,7 +17,7 @@
     {
       "id": "ida-pro-mcp",
       "name": "ida-pro-mcp",
-      "enabled": true,
+      "enabled": false,
       "transport": "http",
       "args": [],
       "env": {},
@@ -30,7 +30,7 @@
     {
       "id": "ghidra-mcp",
       "name": "ghidra-mcp",
-      "enabled": true,
+      "enabled": false,
       "transport": "stdio",
       "command": "python",
       "args": [
@@ -51,7 +51,7 @@
     {
       "id": "hexstrike-ai",
       "name": "hexstrike-ai",
-      "enabled": true,
+      "enabled": false,
       "transport": "stdio",
       "command": "D:\\Coding\\MCP\\hexstrike-ai\\hexstrike_env\\Scripts\\python.exe",
       "args": [
@@ -70,7 +70,7 @@
     {
       "id": "open-design",
       "name": "open-design",
-      "enabled": true,
+      "enabled": false,
       "transport": "stdio",
       "command": "node",
       "args": [
@@ -100,14 +100,16 @@
       ],
       "env": {},
       "tool_prefix": "colab-mcp",
-      "expose": "meta_only",
-      "tools": [],
+      "expose": "allowlist",
+      "tools": [
+        "open_colab_browser_connection"
+      ],
       "idle_timeout_sec": 600
     },
     {
       "id": "UnityMCP",
       "name": "UnityMCP",
-      "enabled": true,
+      "enabled": false,
       "transport": "http",
       "args": [],
       "env": {},
@@ -128,7 +130,8 @@
       "tool_prefix": "codebase_retrieval",
       "expose": "allowlist",
       "tools": [
-        "codebase-retrieval"
+        "codebase-retrieval",
+        "file-retrieval"
       ],
       "idle_timeout_sec": 600
     },
@@ -160,8 +163,12 @@
       ],
       "env": {},
       "tool_prefix": "headroom",
-      "expose": "meta_only",
-      "tools": [],
+      "expose": "allowlist",
+      "tools": [
+        "headroom_compress",
+        "headroom_retrieve",
+        "headroom_stats"
+      ],
       "idle_timeout_sec": 600
     },
     {

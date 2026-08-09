@@ -48,12 +48,12 @@ Bình thường khi:
 
 | Profile | Số tool | Dùng khi |
 |---|---|---|
-| `slim` *(mặc định)* | **23** | ChatGPT web — payload `tools/list` nhỏ, ít lỗi discovery |
+| `slim` *(mặc định)* | **34** | ChatGPT web — payload `tools/list` nhỏ, ít lỗi discovery |
 | `full` | **47** | MCP client khác, hoặc khi cần nhóm tool bên dưới |
 
 **Chỉ có ở `full`** — gọi các tool này ở `slim` sẽ báo *tool not found*:
 
-`delete_file` · `delete_directory` · `move_file` · `replace_regex` · `list_allowed_directories` · `mcp_tools` · `mcp_call` · `git_log` · `git_branch` · `git_stash` · `git_reset` · `git_pull` · `git_push` · `git_checkout`
+`edit_file` · `multi_edit` · `list_directory` · `shell_status` · `shell_reset` · `stop_process` · `delete_directory` · `replace_regex` · `list_allowed_directories` · `git_log` · `git_branch` · `git_stash` · `git_reset` · `git_pull` · `git_push` · `git_checkout`
 
 Ở `slim`, thay thế bằng `run_command` (`git log`, `git push`, `rm`, `mv`, …). Gọi `agent_status` để biết profile đang chạy.
 
@@ -63,15 +63,14 @@ Bình thường khi:
 |---|---|---|
 | `Read` | `read_text_file` | Có `offset`+`limit` (line numbers) |
 | `Write` | `write_file` | |
-| `Edit` | `edit_file` | Có `replace_all` |
-| `MultiEdit` | `multi_edit` | |
+| `Edit` / `MultiEdit` | `apply_patch` | Tool sửa code chính |
 | `Glob` | `glob` | Sort theo mtime |
 | `Grep` | `grep` | content / files_with_matches / count |
-| `LS` | `list_directory` | Có `ignore` globs |
+| `LS` | `glob` | Tìm theo path/pattern |
 | `Bash` | `run_command` | Lệnh ngắn, chờ xong |
 | Background shell | `start_process` + `process_output` | |
 | `Rewind` | `rewind` | `list` / `preview` / `restore` — undo file edits qua checkpoint tự động |
-| — | `mcp_servers`, `mcp_tools`, `mcp_call` | Gọi MCP server khác trên máy (hub). `mcp_tools`/`mcp_call` chỉ có ở `full` |
+| — | `mcp_servers`, `mcp_tools`, `mcp_call` | Gọi MCP server khác trên máy (hub) |
 | — | Admin UI `:<ADMIN_PORT>/ui` | Import MCP từ Cursor / Claude Code / OpenCode (mặc định 3001) |
 | — | `apply_patch` | Codex/OpenAI style (thêm so với Claude) |
 | — | `git_*`, `git_restore` | Git tools riêng (Claude dùng Bash) |
@@ -86,12 +85,10 @@ Bình thường khi:
 | Tìm file theo tên | `glob` |
 | Tìm nội dung | `grep` |
 | Đọc file | `read_text_file` |
-| Liệt kê thư mục | `list_directory` |
 | Sửa bằng diff/patch | `apply_patch` (ưu tiên) |
-| Sửa nhiều đoạn | `multi_edit` |
 | Sửa bằng regex | `replace_regex` *(full)* |
 | Tạo file mới | `write_file` |
-| Xóa / đổi tên | `delete_file`, `move_file` *(full)* — ở `slim` dùng `run_command` |
+| Xóa / đổi tên | `delete_file`, `move_file` |
 | Chạy lệnh ngắn | `run_command` |
 | Build/test dài | `start_process` → `process_output` |
 | Git | `git_status`, `git_diff`, `git_commit`, `git_restore` |

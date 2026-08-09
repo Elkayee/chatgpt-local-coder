@@ -204,7 +204,7 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
   }
 
   async function buildSession(preferredSessionId?: string): Promise<McpSession> {
-    const mcpServer = createMcpServer(
+    const mcpServer = await createMcpServer(
       config.workspaceRoot,
       config.shellTimeout,
       config.workspaceRoots,
