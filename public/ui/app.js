@@ -33,6 +33,7 @@ let activityPollTimer = null;
 let activityEventSource = null;
 let activitySeenIds = new Set();
 let activityPaused = false;
+let adminToken = sessionStorage.getItem("admin-token") || "";
 
 function toast(msg, isError = false) {
   const el = document.getElementById("toast");
@@ -44,10 +45,27 @@ function toast(msg, isError = false) {
 }
 
 async function api(path, options = {}) {
+  const { authRetried = false, ...fetchOptions } = options;
+  const requestToken = adminToken;
+  const headers = { "Content-Type": "application/json", ...(fetchOptions.headers || {}) };
+  if (requestToken) headers["X-Admin-Token"] = requestToken;
+
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
+    ...fetchOptions,
+    headers,
   });
+  if (res.status === 401 && !authRetried) {
+    if (adminToken && adminToken !== requestToken) {
+      return api(path, { ...fetchOptions, authRetried: true });
+    }
+    const provided = prompt("Admin token:", adminToken);
+    if (provided !== null) {
+      adminToken = provided.trim();
+      if (adminToken) sessionStorage.setItem("admin-token", adminToken);
+      else sessionStorage.removeItem("admin-token");
+      return api(path, { ...fetchOptions, authRetried: true });
+    }
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -312,6 +330,11 @@ function startActivityStream() {
   stopActivityStream();
   const live = document.getElementById("activity-live").checked;
   if (!live || activityPaused) return;
+
+  if (adminToken) {
+    activityPollTimer = setInterval(() => loadActivity().catch(() => {}), 2000);
+    return;
+  }
 
   activityEventSource = new EventSource("/api/activity/stream");
   activityEventSource.onmessage = (ev) => {

@@ -1,0 +1,8 @@
+[Unit]
+Description=Codex MCP readiness watchdog
+After=codex-mcp.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/ubuntu/chatgpt-local-coder/.env
+ExecStart=/usr/local/sbin/codex-mcp-watchdog

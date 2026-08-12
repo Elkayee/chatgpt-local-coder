@@ -6,11 +6,7 @@ import cors from "cors";
 import path from "path";
 import { randomUUID } from "crypto";
 
-import {
-  setDefaultCwd,
-  getDefaultCwd,
-  getFullDiskAccess,
-} from "./lib/path-security.js";
+import { setDefaultCwd } from "./lib/path-security.js";
 import {
   consumeSessionTransportError,
   createSessionManager,
@@ -31,6 +27,7 @@ import { createOAuthShimRouter } from "./lib/oauth-shim.js";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "127.0.0.1";
 const MCP_TOKEN = (process.env.MCP_TOKEN || "").trim();
+const MCP_TOKEN_NEXT = (process.env.MCP_TOKEN_NEXT || "").trim();
 const ADMIN_PORT = parseInt(process.env.ADMIN_PORT || "3001", 10);
 const SHELL_TIMEOUT = parseInt(process.env.SHELL_TIMEOUT || "120", 10);
 const SESSION_RECOVERY =
@@ -94,12 +91,25 @@ const sessionManager = createSessionManager({
   projectMemoryInstructions: instructionContext.instructionsText,
 });
 
+const MCP_TOKENS = [...new Set([MCP_TOKEN, MCP_TOKEN_NEXT].filter(Boolean))];
+const MCP_PATHS = MCP_TOKENS.length > 0
+  ? MCP_TOKENS.flatMap((token) => [`/${token}`, `/mcp/${token}`])
+  : ["/", "/mcp"];
+const MCP_PATHS_SET = new Set(MCP_PATHS);
+
+function redactRequestUrl(rawUrl: string): string {
+  const queryIndex = rawUrl.indexOf("?");
+  const pathname = queryIndex >= 0 ? rawUrl.slice(0, queryIndex) : rawUrl;
+  if (!MCP_PATHS_SET.has(pathname)) return rawUrl;
+  return pathname.startsWith("/mcp/") ? "/mcp/<redacted>" : "/<redacted>";
+}
+
 const app = express();
 app.use(cors());
 
 // Log every incoming request details for debugging Gemini connection
 app.use((req, _res, next) => {
-  console.log(`[INCOMING] ${req.method} ${req.originalUrl} | Content-Type: ${req.headers["content-type"]} | Accept: ${req.headers["accept"]} | Auth: ${req.headers["authorization"] ? "Bearer ***" : "none"}`);
+  console.log(`[INCOMING] ${req.method} ${redactRequestUrl(req.originalUrl)} | Content-Type: ${req.headers["content-type"]} | Accept: ${req.headers["accept"]} | Auth: ${req.headers["authorization"] ? "Bearer ***" : "none"}`);
   next();
 });
 
@@ -132,11 +142,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(createOAuthShimRouter());
 
 // ChatGPT co the goi "/" hoac "/mcp" — ho tro ca hai.
-// Neu dat MCP_TOKEN, endpoint doi thanh "/<token>" + "/mcp/<token>" va cac path
+// Neu dat MCP_TOKEN/MCP_TOKEN_NEXT, endpoint doi thanh "/<token>" + "/mcp/<token>" va cac path
 // khong co token se tra 401 (chong scan tunnel URL / trang web goi vao localhost).
-const MCP_PATHS = MCP_TOKEN ? [`/${MCP_TOKEN}`, `/mcp/${MCP_TOKEN}`] : ["/", "/mcp"];
-const MCP_PATHS_SET = new Set(MCP_PATHS);
-
 app.use((req, res, next) => {
   const started = Date.now();
   const isMcpRoute = MCP_PATHS_SET.has(req.path);
@@ -163,7 +170,7 @@ app.use((req, res, next) => {
             : `HTTP ${res.statusCode}`);
       logMcpHttpEvent({
         method: req.method,
-        path: req.path,
+        path: redactRequestUrl(req.path),
         httpStatus: res.statusCode,
         durationMs: duration,
         sessionId,
@@ -179,7 +186,7 @@ app.use((req, res, next) => {
   next();
 });
 
-if (MCP_TOKEN) {
+if (MCP_TOKENS.length > 0) {
   // 404 chu KHONG phai 401: theo chuan MCP, 401 la tin hieu "can OAuth" — client
   // (ChatGPT) se di tim OAuth metadata, khong thay, roi treo. 404 = khong co gi o day.
   for (const unguarded of ["/", "/mcp"]) {
@@ -193,14 +200,6 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     name: "codex-mcp-server",
-    workspace: workspaceRoot,
-    defaultCwd: getDefaultCwd(),
-    fullMachineAccess: true,
-    fullDiskAccess: getFullDiskAccess(),
-    activeSessions: sessionManager.count(),
-    sessionRecovery: SESSION_RECOVERY,
-    mcpEndpoints: MCP_PATHS,
-    instructions: summarizeInstructionContext(instructionContext),
   });
 });
 
@@ -372,14 +371,14 @@ const server = app.listen(PORT, HOST, () => {
   console.log("  Codex MCP Server");
   console.log("========================================");
   console.log(`  Local:     http://${HOST}:${PORT}`);
-  console.log(`  MCP:       http://${HOST}:${PORT}${MCP_PATHS[0]}`);
-  console.log(`  MCP alt:   http://${HOST}:${PORT}${MCP_PATHS[1]}`);
+  console.log(`  MCP:       http://${HOST}:${PORT}${MCP_TOKENS.length > 0 ? "/mcp/<redacted>" : "/mcp"}`);
+  console.log(`  MCP tokens: ${MCP_TOKENS.length}`);
   console.log(`  Health:    http://${HOST}:${PORT}/health`);
   console.log(`  Admin UI:  http://127.0.0.1:${ADMIN_PORT}/ui`);
   console.log(`  Default cwd: ${workspaceRoot}`);
   console.log(`  Full machine access: ON (no path restrictions)`);
   console.log(`  Session recovery: ${SESSION_RECOVERY ? "ON" : "OFF"}`);
-  console.log(`  Auth:      ${MCP_TOKEN ? "ON (MCP_TOKEN in URL path)" : "OFF — dat MCP_TOKEN trong .env!"}`);
+  console.log(`  Auth:      ${MCP_TOKENS.length > 0 ? "ON (token in URL path)" : "OFF — dat MCP_TOKEN trong .env!"}`);
   console.log(`  OAuth shim:  ON (Claude Web & Gemini Spark compatible)`);
   console.log(`  PID:       ${process.pid}`);
   console.log("========================================");
@@ -400,13 +399,19 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-process.on("SIGINT", () => {
-  console.log("\n[DUNG] Server dang tat...");
+let shuttingDown = false;
+function shutdown(signal: "SIGINT" | "SIGTERM"): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[DUNG] Server dang tat (${signal})...`);
   sessionManager.stopCleanup();
   void upstreamManager.shutdown();
   adminServer.close();
   server.close(() => process.exit(0));
-});
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 // Tranh process tu tat khi stdin dong (Windows + .bat)
 if (process.stdin.isTTY) {

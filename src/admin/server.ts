@@ -24,11 +24,12 @@ export function startAdminServer(options: AdminServerOptions): Server {
   const app = express();
   app.use(express.json({ limit: "5mb" }));
   app.use(localhostOnly);
-  app.use(adminAuth);
 
   const uiDir = path.resolve(__dirname, "../../public/ui");
   app.use("/ui", express.static(uiDir));
   app.get("/", (_req, res) => res.redirect("/ui/"));
+
+  app.use(adminAuth);
 
   app.use(createAdminRouter(options.manager, {
     mcpPort: options.mcpPort,

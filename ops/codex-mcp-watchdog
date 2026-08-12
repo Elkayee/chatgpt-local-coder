@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+STATE=/run/codex-mcp-watchdog.failures
+PROBE=/home/ubuntu/chatgpt-local-coder/scripts/mcp-readiness-probe.mjs
+
+probe() {
+    MCP_WATCHDOG_PORT=3002 /usr/bin/node "$PROBE" >/dev/null 2>&1
+}
+
+if probe; then
+    rm -f "$STATE"
+    exit 0
+fi
+
+failures=0
+if [ -r "$STATE" ]; then
+    read -r failures < "$STATE" || failures=0
+fi
+case "$failures" in ''|*[!0-9]*) failures=0 ;; esac
+failures=$((failures + 1))
+printf '%s\n' "$failures" > "$STATE"
+logger -t codex-mcp-watchdog "MCP readiness failed ($failures/2)"
+
+if [ "$failures" -lt 2 ]; then
+    exit 0
+fi
+
+rm -f "$STATE"
+logger -t codex-mcp-watchdog "MCP readiness threshold reached; restarting codex-mcp.service"
+systemctl restart codex-mcp.service
+
+attempt=1
+while [ "$attempt" -le 5 ]; do
+    sleep 1
+    if probe; then
+        logger -t codex-mcp-watchdog "codex-mcp.service recovered after restart"
+        exit 0
+    fi
+    attempt=$((attempt + 1))
+done
+
+logger -t codex-mcp-watchdog "codex-mcp.service restart completed but MCP readiness still fails"
+exit 1

@@ -21,6 +21,7 @@ const SESSION_DELETE_GRACE_MS = parseInt(
   process.env.MCP_SESSION_DELETE_GRACE_MS || "45000",
   10
 ); // keep session after DELETE so in-flight tool calls can finish
+const SESSION_MAX_COUNT = parseInt(process.env.MCP_SESSION_MAX || "64", 10);
 
 const lastTransportErrors: Record<string, string> = {};
 const sessionOpChains = new Map<string, Promise<void>>();
@@ -159,6 +160,7 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
   const sessions: Record<string, McpSession> = {};
   const pendingRecoveries: Record<string, McpSession> = {};
   const deleteGraceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  const activeGetSessions = new Set<string>();
   let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   function touch(sessionId: string): void {
@@ -199,6 +201,27 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
     console.log(`[MCP] Session removed (${reason}): ${sessionId}`);
   }
 
+  function enforceSessionLimit(protectedSessionId: string): void {
+    if (SESSION_MAX_COUNT <= 0) return;
+    const overflow = Object.keys(sessions).length - SESSION_MAX_COUNT;
+    if (overflow <= 0) return;
+
+    const oldest = Object.entries(sessions)
+      .filter(
+        ([sid]) =>
+          sid !== protectedSessionId &&
+          !sessionOpChains.has(sid) &&
+          !activeGetSessions.has(sid)
+      )
+      .sort(([, a], [, b]) => a.lastAccessedAt - b.lastAccessedAt)
+      .slice(0, overflow);
+
+    for (const [sid, session] of oldest) {
+      void session.transport.close().catch(() => undefined);
+      removeSession(sid, "session cap exceeded");
+    }
+  }
+
   function clearPendingRecovery(sessionId: string): void {
     delete pendingRecoveries[sessionId];
   }
@@ -227,6 +250,7 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
           createdAt: existing?.createdAt ?? Date.now(),
         };
         clearPendingRecovery(sid);
+        enforceSessionLimit(sid);
         console.log(`[MCP] Session initialized: ${sid}`);
       },
       onsessionclosed: (sid) => {
@@ -390,6 +414,13 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
       // (tools/list, tools/call) se treo — deadlock. Chi tuan tu hoa POST/DELETE.
       if (sid && req.method !== "GET") {
         await enqueueSessionOp(sid, run);
+      } else if (sid) {
+        activeGetSessions.add(sid);
+        try {
+          await run();
+        } finally {
+          activeGetSessions.delete(sid);
+        }
       } else {
         await run();
       }
@@ -443,7 +474,11 @@ export function createSessionManager(config: SessionManagerConfig): SessionManag
       cleanupTimer = setInterval(() => {
         const now = Date.now();
         for (const [sid, session] of Object.entries(sessions)) {
-          if (now - session.lastAccessedAt > SESSION_TTL_MS) {
+          if (
+            now - session.lastAccessedAt > SESSION_TTL_MS &&
+            !sessionOpChains.has(sid) &&
+            !activeGetSessions.has(sid)
+          ) {
             void session.transport.close().catch(() => undefined);
             removeSession(sid, "TTL expired");
           }
