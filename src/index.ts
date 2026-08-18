@@ -14,6 +14,7 @@ import {
   isInitializeRequest,
 } from "./lib/mcp-session-manager.js";
 import { initUpstreamManager } from "./lib/mcp-upstream-manager.js";
+import { startContextEngineDiscovery } from "./lib/context-engine-discovery.js";
 import { startAdminServer } from "./admin/server.js";
 import { logMcpHttpEvent, logMcpRequest } from "./lib/activity-log.js";
 import {
@@ -58,6 +59,7 @@ const workspaceRoot = workspaceRoots[0] || process.cwd();
 setDefaultCwd(workspaceRoot);
 
 const upstreamManager = await initUpstreamManager();
+const stopContextEngineDiscovery = await startContextEngineDiscovery(upstreamManager);
 
 const instructionContext: InstructionContext = await buildInstructionContext({
   workspaceRoot,
@@ -284,6 +286,11 @@ function handleStaleSession(
 }
 
 async function handleMcpGet(req: express.Request, res: express.Response): Promise<void> {
+  // Prevent proxies (Caddy, Cloudflare, etc.) from buffering or timing out SSE stream
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+
   const querySessionId =
     (req.query.sessionId as string) ||
     (req.query["mcp-session-id"] as string) ||
@@ -387,6 +394,11 @@ const server = app.listen(PORT, HOST, () => {
   console.log("");
 });
 
+// Configure long-lived HTTP socket timeouts for SSE stability
+server.keepAliveTimeout = 120_000; // 2 minutes
+server.headersTimeout = 125_000;   // > keepAliveTimeout
+server.requestTimeout = 0;         // disable request timeout for SSE streams
+
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     console.error(`\n[LOI] Port ${PORT} da co server khac dang chay!`);
@@ -405,6 +417,7 @@ function shutdown(signal: "SIGINT" | "SIGTERM"): void {
   shuttingDown = true;
   console.log(`\n[DUNG] Server dang tat (${signal})...`);
   sessionManager.stopCleanup();
+  stopContextEngineDiscovery();
   void upstreamManager.shutdown();
   adminServer.close();
   server.close(() => process.exit(0));

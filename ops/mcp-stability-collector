@@ -1,0 +1,247 @@
+#!/bin/sh
+set -eu
+
+OUT=/run/mcp-stability.metrics
+ENV_FILE=/home/ubuntu/chatgpt-local-coder/.env
+ADMIN_URL=http://127.0.0.1:3003/health
+LOCAL_URL=http://127.0.0.1:3002/health
+PUBLIC_URL=https://mcp-140-245-49-68.sslip.io/health
+WINDOW='-65 seconds'
+TOOL_WINDOW='-5 minutes'
+
+is_active() {
+    if systemctl is-active --quiet "$1"; then printf '1'; else printf '0'; fi
+}
+
+service_age_seconds() {
+    unit=$1
+    start_us=$(systemctl show "$unit" -p ActiveEnterTimestampMonotonic --value 2>/dev/null || printf '0')
+    case "$start_us" in ''|*[!0-9]*) start_us=0 ;; esac
+    read -r boot_seconds _ </proc/uptime
+    boot_seconds=${boot_seconds%%.*}
+    age=$((boot_seconds - (start_us / 1000000)))
+    [ "$age" -lt 0 ] && age=0
+    printf '%s' "$age"
+}
+
+http_probe() {
+    url=$1
+    result=$(curl -sS -o /dev/null -w '%{http_code} %{time_total}' --max-time 4 "$url" 2>/dev/null || true)
+    code=${result%% *}
+    seconds=${result#* }
+    case "$code" in 200) up=1 ;; *) up=0 ;; esac
+    latency_ms=$(awk -v s="$seconds" 'BEGIN { if (s ~ /^[0-9.]+$/) printf "%d", (s * 1000) + 0.5; else print 4000 }')
+    printf '%s %s %s\n' "$up" "${code:-0}" "$latency_ms"
+}
+
+codex_up=$(is_active codex-mcp.service)
+context_engine_up=$(is_active context-engine.service)
+watchdog_up=$(is_active codex-mcp-watchdog.timer)
+
+set -- $(http_probe "$LOCAL_URL")
+local_health_up=$1
+local_http_code=$2
+local_latency_ms=$3
+
+set -- $(http_probe "$PUBLIC_URL")
+public_health_up=$1
+public_http_code=$2
+public_latency_ms=$3
+
+admin_ok=0
+active_sessions=0
+enabled_upstreams=0
+connected_upstreams=0
+jxser_standard_connected=0
+jxnative_connected=0
+admin_token=$(sed -n 's/^ADMIN_TOKEN=//p' "$ENV_FILE" 2>/dev/null | head -n 1)
+if [ -n "$admin_token" ]; then
+    admin_json=$(curl -fsS --max-time 4 -H "Authorization: Bearer $admin_token" "$ADMIN_URL" 2>/dev/null || true)
+    if [ -n "$admin_json" ]; then
+        parsed=$(printf '%s' "$admin_json" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    upstream = d.get("upstream", [])
+    enabled = [x for x in upstream if x.get("enabled")]
+    connected = [x for x in enabled if x.get("connected")]
+    by_id = {x.get("id"): x for x in upstream}
+    vals = [
+        1,
+        int(d.get("active_sessions", 0)),
+        len(enabled),
+        len(connected),
+        int(bool(by_id.get("codebase-retrieval-jxser_standard", {}).get("connected"))),
+        int(bool(by_id.get("codebase-retrieval-jxnative", {}).get("connected"))),
+    ]
+    print(" ".join(map(str, vals)))
+except Exception:
+    sys.exit(1)
+' 2>/dev/null || true)
+        if [ -n "$parsed" ]; then
+            set -- $parsed
+            admin_ok=$1
+            active_sessions=$2
+            enabled_upstreams=$3
+            connected_upstreams=$4
+            jxser_standard_connected=$5
+            jxnative_connected=$6
+        fi
+    fi
+fi
+
+oracle_connected=$((codex_up * public_health_up * admin_ok))
+
+session_max=$(sed -n 's/^MCP_SESSION_MAX=//p' "$ENV_FILE" 2>/dev/null | head -n 1)
+case "$session_max" in ''|*[!0-9]*) session_max=64 ;; esac
+if [ "$session_max" -gt 0 ]; then
+    session_pressure_pct=$((active_sessions * 100 / session_max))
+else
+    session_pressure_pct=0
+fi
+
+session_events=$(journalctl -q -u codex-mcp.service --since "$WINDOW" --no-pager -o cat \
+    --grep='\[MCP\] (Session recovered:|Transport closed for|Session removed \(session cap exceeded\):)' 2>/dev/null || true)
+cap_evictions=$(printf '%s\n' "$session_events" | grep -cF '[MCP] Session removed (session cap exceeded):' || true)
+session_recoveries=$(printf '%s\n' "$session_events" | grep -cF '[MCP] Session recovered:' || true)
+transport_closed=$(printf '%s\n' "$session_events" | grep -cF '[MCP] Transport closed for' || true)
+
+# Derive connector quality from real tool traffic already handled by codex-mcp.
+# This avoids synthetic MCP probes creating sessions or adding load to upstreams.
+tool_events=$(journalctl -q -u codex-mcp.service --since "$TOOL_WINDOW" --no-pager -o cat \
+    --grep='\[MCP\] \[[^]]+\] tools/call ' 2>/dev/null || true)
+tool_stats=$(printf '%s\n' "$tool_events" | python3 -c '
+import math, re, sys
+
+line_re = re.compile(r"^\[MCP\] \[([^]]+)\] tools/call ([^ ]+) — (.*?) ([0-9]+)ms session=")
+
+stats = {
+    "oracle": {"lat": [], "errors": 0, "timeouts": 0, "calls": 0},
+    "jxser": {"lat": [], "errors": 0, "timeouts": 0, "calls": 0},
+    "jxnative": {"lat": [], "errors": 0, "timeouts": 0, "calls": 0},
+}
+
+def add(bucket, status, detail, latency):
+    s = stats[bucket]
+    s["calls"] += 1
+    s["lat"].append(latency)
+    low_status = status.lower()
+    low_detail = detail.lower()
+    if low_status != "ok":
+        s["errors"] += 1
+    if "timeout" in low_status or "timeout" in low_detail or "timed out" in low_detail:
+        s["timeouts"] += 1
+
+for raw in sys.stdin:
+    m = line_re.match(raw.rstrip("\n"))
+    if not m:
+        continue
+    status, tool, detail, latency_s = m.groups()
+    latency = int(latency_s)
+    add("oracle", status, detail, latency)
+    if tool == "mcp_call" and detail.startswith("codebase-retrieval-jxser_standard →"):
+        add("jxser", status, detail, latency)
+    elif tool == "mcp_call" and detail.startswith("codebase-retrieval-jxnative →"):
+        add("jxnative", status, detail, latency)
+
+def p95(values):
+    if not values:
+        return 0
+    values = sorted(values)
+    return values[max(0, math.ceil(len(values) * 0.95) - 1)]
+
+out = []
+for key in ("oracle", "jxser", "jxnative"):
+    s = stats[key]
+    out.extend((s["calls"], s["errors"], s["timeouts"], p95(s["lat"])))
+print(" ".join(map(str, out)))
+' 2>/dev/null || true)
+
+oracle_tool_calls=0
+oracle_tool_errors=0
+oracle_tool_timeouts=0
+oracle_tool_p95_ms=0
+jxser_tool_calls=0
+jxser_tool_errors=0
+jxser_tool_timeouts=0
+jxser_tool_p95_ms=0
+jxnative_tool_calls=0
+jxnative_tool_errors=0
+jxnative_tool_timeouts=0
+jxnative_tool_p95_ms=0
+if [ -n "$tool_stats" ]; then
+    set -- $tool_stats
+    oracle_tool_calls=$1
+    oracle_tool_errors=$2
+    oracle_tool_timeouts=$3
+    oracle_tool_p95_ms=$4
+    jxser_tool_calls=$5
+    jxser_tool_errors=$6
+    jxser_tool_timeouts=$7
+    jxser_tool_p95_ms=$8
+    jxnative_tool_calls=$9
+    shift 9
+    jxnative_tool_errors=$1
+    jxnative_tool_timeouts=$2
+    jxnative_tool_p95_ms=$3
+fi
+
+watchdog_failures=0
+if [ -r /run/codex-mcp-watchdog.failures ]; then
+    read -r watchdog_failures </run/codex-mcp-watchdog.failures || watchdog_failures=0
+fi
+case "$watchdog_failures" in ''|*[!0-9]*) watchdog_failures=0 ;; esac
+
+codex_restarts=$(systemctl show codex-mcp.service -p NRestarts --value 2>/dev/null || printf '0')
+context_engine_restarts=$(systemctl show context-engine.service -p NRestarts --value 2>/dev/null || printf '0')
+case "$codex_restarts" in ''|*[!0-9]*) codex_restarts=0 ;; esac
+case "$context_engine_restarts" in ''|*[!0-9]*) context_engine_restarts=0 ;; esac
+
+codex_uptime_sec=$(service_age_seconds codex-mcp.service)
+context_engine_uptime_sec=$(service_age_seconds context-engine.service)
+
+tmp=$(mktemp /run/mcp-stability.metrics.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+cat >"$tmp" <<EOF
+mcp_codex_up=$codex_up
+mcp_context_engine_up=$context_engine_up
+mcp_watchdog_up=$watchdog_up
+mcp_local_health_up=$local_health_up
+mcp_public_health_up=$public_health_up
+mcp_local_http_code=$local_http_code
+mcp_public_http_code=$public_http_code
+mcp_admin_ok=$admin_ok
+mcp_oracle_connected=$oracle_connected
+mcp_local_latency_ms=$local_latency_ms
+mcp_public_latency_ms=$public_latency_ms
+mcp_active_sessions=$active_sessions
+mcp_session_max=$session_max
+mcp_session_pressure_pct=$session_pressure_pct
+mcp_enabled_upstreams=$enabled_upstreams
+mcp_connected_upstreams=$connected_upstreams
+mcp_jxser_standard_connected=$jxser_standard_connected
+mcp_jxnative_connected=$jxnative_connected
+mcp_cap_evictions=$cap_evictions
+mcp_session_recoveries=$session_recoveries
+mcp_transport_closed=$transport_closed
+mcp_oracle_tool_calls_5m=$oracle_tool_calls
+mcp_oracle_tool_errors_5m=$oracle_tool_errors
+mcp_oracle_tool_timeouts_5m=$oracle_tool_timeouts
+mcp_oracle_tool_p95_ms=$oracle_tool_p95_ms
+mcp_jxser_tool_calls_5m=$jxser_tool_calls
+mcp_jxser_tool_errors_5m=$jxser_tool_errors
+mcp_jxser_tool_timeouts_5m=$jxser_tool_timeouts
+mcp_jxser_tool_p95_ms=$jxser_tool_p95_ms
+mcp_jxnative_tool_calls_5m=$jxnative_tool_calls
+mcp_jxnative_tool_errors_5m=$jxnative_tool_errors
+mcp_jxnative_tool_timeouts_5m=$jxnative_tool_timeouts
+mcp_jxnative_tool_p95_ms=$jxnative_tool_p95_ms
+mcp_watchdog_failures=$watchdog_failures
+mcp_codex_restarts=$codex_restarts
+mcp_context_engine_restarts=$context_engine_restarts
+mcp_codex_uptime_sec=$codex_uptime_sec
+mcp_context_engine_uptime_sec=$context_engine_uptime_sec
+EOF
+chmod 0644 "$tmp"
+mv -f "$tmp" "$OUT"
+trap - EXIT

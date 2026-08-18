@@ -2,10 +2,10 @@
 set -eu
 
 STATE=/run/codex-mcp-watchdog.failures
-PROBE=/home/ubuntu/chatgpt-local-coder/scripts/mcp-readiness-probe.mjs
+URL=http://127.0.0.1:3002/health
 
 probe() {
-    MCP_WATCHDOG_PORT=3002 /usr/bin/node "$PROBE" >/dev/null 2>&1
+    curl -fsS --max-time 3 "$URL" >/dev/null 2>&1
 }
 
 if probe; then

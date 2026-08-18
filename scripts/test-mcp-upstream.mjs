@@ -13,6 +13,7 @@ import {
 } from "../dist/lib/mcp-upstream-config.js";
 import { McpUpstreamManager } from "../dist/lib/mcp-upstream-manager.js";
 import { refreshProxiedTools, jsonSchemaToZodShape } from "../dist/lib/mcp-tool-proxy.js";
+import { planContextEngineServers } from "../dist/lib/context-engine-discovery.js";
 import { registerMcpBridgeTools } from "../dist/tools/mcp-bridge.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -65,6 +66,61 @@ await fs.mkdir(tmpDir, { recursive: true });
 
 const configPath = path.join(tmpDir, "upstream.json");
 process.env.MCP_UPSTREAM_CONFIG = configPath;
+
+await run("context engine discovery adds only new indexed repos", async () => {
+  const existing = [
+    {
+      id: "codebase-retrieval-jxnative",
+      name: "codebase-retrieval-jxnative",
+      enabled: true,
+      transport: "http",
+      url: "https://engine.example/mcp-repo/home_ubuntu_Documents_jxnative",
+      tool_prefix: "jxnative",
+      expose: "allowlist",
+      tools: ["codebase-retrieval", "file-retrieval"],
+    },
+  ];
+  const repos = [
+    {
+      repo: "/home/ubuntu/Documents/jxnative",
+      mcp_repo_id: "home_ubuntu_Documents_jxnative",
+      file_count: 10,
+      state: "indexed",
+    },
+    {
+      repo: "/home/ubuntu/Documents/new_project",
+      mcp_repo_id: "home_ubuntu_Documents_new_project",
+      file_count: 5,
+      state: "indexed",
+    },
+    {
+      repo: "/home/ubuntu/Documents/not_ready",
+      mcp_repo_id: "home_ubuntu_Documents_not_ready",
+      file_count: 0,
+      state: "not_indexed",
+    },
+    {
+      repo: "/home/ubuntu/Documents/legacy",
+      mcp_repo_id: "home_ubuntu_Documents_legacy",
+      file_count: 20,
+      state: "indexed",
+    },
+  ];
+  const additions = planContextEngineServers(repos, existing, {
+    mcpBaseUrl: "http://127.0.0.1:6699",
+    exclude: new Set(["/home/ubuntu/Documents/legacy"]),
+  });
+  if (additions.length !== 1) throw new Error(JSON.stringify(additions));
+  const added = additions[0];
+  if (added.id !== "codebase-retrieval-new_project") throw new Error(JSON.stringify(added));
+  if (added.tool_prefix !== "new_project") throw new Error(JSON.stringify(added));
+  if (added.url !== "http://127.0.0.1:6699/mcp-repo/home_ubuntu_Documents_new_project") {
+    throw new Error(JSON.stringify(added));
+  }
+  if (JSON.stringify(added.tools) !== JSON.stringify(["codebase-retrieval", "file-retrieval"])) {
+    throw new Error(JSON.stringify(added));
+  }
+});
 
 await run("jsonSchemaToZodShape respects required fields", async () => {
   const shape = jsonSchemaToZodShape({

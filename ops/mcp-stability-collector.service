@@ -1,0 +1,8 @@
+[Unit]
+Description=Collect MCP stability metrics for Netdata
+After=codex-mcp.service context-engine.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mcp-stability-collector

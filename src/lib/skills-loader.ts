@@ -19,7 +19,12 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
 }
 
 export async function loadProjectSkills(workspaceRoot: string): Promise<SkillSummary[]> {
-  const skillsDir = path.join(workspaceRoot, ".claude", "skills");
+  const projectSkillsDir = path.join(workspaceRoot, ".claude", "skills");
+  const globalSkillsDir = process.env.CHATGPT_GLOBAL_SKILLS_DIR?.trim();
+  const skillsDirs = [projectSkillsDir];
+  if (globalSkillsDir && path.resolve(globalSkillsDir) !== path.resolve(projectSkillsDir)) {
+    skillsDirs.push(globalSkillsDir);
+  }
   const out: SkillSummary[] = [];
 
   async function walk(dir: string, depth: number): Promise<void> {
@@ -48,7 +53,9 @@ export async function loadProjectSkills(workspaceRoot: string): Promise<SkillSum
     }
   }
 
-  await walk(skillsDir, 0);
+  for (const skillsDir of skillsDirs) {
+    await walk(skillsDir, 0);
+  }
   return out;
 }
 

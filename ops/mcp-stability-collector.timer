@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect MCP stability metrics every 30 seconds
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+Unit=mcp-stability-collector.service
+
+[Install]
+WantedBy=timers.target

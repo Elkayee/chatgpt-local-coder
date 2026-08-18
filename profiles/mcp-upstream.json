@@ -2,14 +2,14 @@
   "version": 1,
   "servers": [
     {
-      "id": "codebase-retrieval-jxser",
-      "name": "codebase-retrieval-jxser",
+      "id": "codebase-retrieval-jxser_standard",
+      "name": "codebase-retrieval-jxser_standard",
       "enabled": true,
       "transport": "http",
       "args": [],
       "env": {},
-      "url": "http://127.0.0.1:6699/mcp-repo/home_ubuntu_Documents_jxser",
-      "tool_prefix": "jxser",
+      "url": "http://127.0.0.1:6699/mcp-repo/home_ubuntu_Documents_jxser_standard",
+      "tool_prefix": "jxser_standard",
       "expose": "allowlist",
       "tools": [
         "codebase-retrieval",
@@ -36,11 +36,11 @@
     {
       "id": "codebase-retrieval",
       "name": "codebase-retrieval",
-      "enabled": true,
+      "enabled": false,
       "transport": "http",
       "args": [],
       "env": {},
-      "url": "http://127.0.0.1:6699/mcp",
+      "url": "https://engine-140-245-49-68.sslip.io/mcp",
       "tool_prefix": "codebase_retrieval",
       "expose": "allowlist",
       "tools": [
